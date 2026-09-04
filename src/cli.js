@@ -1,4 +1,7 @@
+import { readFile } from 'node:fs/promises';
+
 import { loadCatalog, listChatModels, modelListId, resolveModel } from './catalog.js';
+import { buildClassificationPrompt, parseClassificationOutput } from './classifier.js';
 import { loadConfig } from './config.js';
 import { MiniplayerError } from './errors.js';
 import { generateOneShot } from './providers.js';
@@ -64,6 +67,24 @@ function parseModelsArgs(args) {
   return filters;
 }
 
+function parseClassifyArgs(args) {
+  let model;
+  let file;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '-m' || arg === '--model') {
+      model = takeOption(args, index, arg);
+      index += 1;
+    } else if (arg === '--file') {
+      file = takeOption(args, index, arg);
+      index += 1;
+    } else {
+      throw new MiniplayerError(`Unknown option for classify: ${arg}`);
+    }
+  }
+  return { model, file };
+}
+
 async function readStdin(stream) {
   let input = '';
   for await (const chunk of stream) input += chunk;
@@ -114,6 +135,34 @@ async function modelsCommand(args, io) {
   return 0;
 }
 
+async function classifyCommand(args, io) {
+  const options = parseClassifyArgs(args);
+  const config = await loadConfig();
+  const selector = options.model ?? config.model;
+  let responseText;
+  if (options.file) {
+    try {
+      responseText = await readFile(options.file, 'utf8');
+    } catch (error) {
+      throw new MiniplayerError(`Unable to read classification input ${options.file}: ${error.message}`);
+    }
+  } else {
+    responseText = await readStdin(io.stdin);
+  }
+  requireText(responseText, 'Classification input');
+
+  const records = await loadCatalog();
+  const { record } = resolveModel(records, selector, config.aliases);
+  const output = await generateOneShot({
+    record,
+    config,
+    prompt: buildClassificationPrompt(responseText),
+  });
+  const classification = parseClassificationOutput(output);
+  io.stdout.write(`${JSON.stringify(classification)}\n`);
+  return 0;
+}
+
 export async function execute(args, io) {
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
     io.stdout.write(HELP);
@@ -123,8 +172,6 @@ export async function execute(args, io) {
   const [command, ...commandArgs] = args;
   if (command === 'run') return runCommand(commandArgs, io);
   if (command === 'models') return modelsCommand(commandArgs, io);
-  if (command === 'classify') {
-    throw new MiniplayerError('classify is not available in this build');
-  }
+  if (command === 'classify') return classifyCommand(commandArgs, io);
   throw new MiniplayerError(`Unknown command: ${command}`);
 }
