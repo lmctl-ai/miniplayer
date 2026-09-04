@@ -1,0 +1,22 @@
+{
+  "name": "miniplayer",
+  "version": "1.0.0",
+  "description": "One-shot language model runner and response classifier",
+  "type": "module",
+  "bin": {
+    "miniplayer": "bin/miniplayer.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^2.0.0",
+    "@ai-sdk/google": "^2.0.0",
+    "@ai-sdk/openai": "^2.0.0",
+    "@ai-sdk/openai-compatible": "^1.0.0",
+    "ai": "^5.0.0"
+  }
+}
