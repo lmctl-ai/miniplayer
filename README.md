@@ -26,8 +26,8 @@ Configuration is optional and lives at `~/.config/miniplayer/config.json`:
   "model": "codex/gpt-5.3-codex-spark",
   "aliases": {
     "codex/gpt-5.3-codex-spark": "chatgpt/gpt-5.3-codex-spark",
-    "claude/haiku": "claude-haiku-4-5",
-    "dsh/v4-flash": "deepseek/deepseek-v4-flash"
+    "claude/claude-haiku-4-5": "claude-haiku-4-5",
+    "dsh/deepseek-v4-flash": "deepseek/deepseek-v4-flash-20260423"
   },
   "provider": {
     "openai": { "apiKey": "...", "baseURL": "https://api.openai.com/v1" },
