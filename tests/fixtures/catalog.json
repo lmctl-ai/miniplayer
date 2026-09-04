@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "record_id": "openrouter:vendor/fast",
+      "source": "openrouter",
+      "source_model_id": "vendor/fast",
+      "provider": "vendor",
+      "mode": "chat",
+      "gateway_id": "vendor/fast",
+      "vendor_model_id": "fast",
+      "canonical_slug": "vendor-fast",
+      "context_window": { "total_tokens": 64000 },
+      "pricing": { "input_per_1m_tokens": 0.2, "output_per_1m_tokens": 0.8 }
+    },
+    {
+      "record_id": "litellm:unique-model",
+      "source": "litellm",
+      "source_model_id": "openai/unique-model",
+      "provider": "openai",
+      "mode": "chat",
+      "gateway_id": null,
+      "vendor_model_id": "unique-model",
+      "canonical_slug": "unique",
+      "context_window": { "total_tokens": 128000 },
+      "pricing": { "input_per_1m_tokens": 2, "output_per_1m_tokens": 8 }
+    },
+    {
+      "record_id": "litellm:shared-a",
+      "source": "litellm",
+      "source_model_id": "shared",
+      "provider": "anthropic",
+      "mode": "chat",
+      "gateway_id": null,
+      "vendor_model_id": "shared-a",
+      "canonical_slug": null,
+      "context_window": { "total_tokens": 32000 },
+      "pricing": { "input_per_1m_tokens": 0.5, "output_per_1m_tokens": 1 }
+    },
+    {
+      "record_id": "litellm:shared-b",
+      "source": "litellm",
+      "source_model_id": "shared",
+      "provider": "anthropic",
+      "mode": "completion",
+      "gateway_id": null,
+      "vendor_model_id": "shared-b",
+      "canonical_slug": null,
+      "context_window": { "total_tokens": 16000 },
+      "pricing": { "input_per_1m_tokens": null, "output_per_1m_tokens": null }
+    },
+    {
+      "record_id": "litellm:unsupported",
+      "source": "litellm",
+      "source_model_id": "unsupported-model",
+      "provider": "other-provider",
+      "mode": "chat",
+      "gateway_id": null,
+      "vendor_model_id": "unsupported-model",
+      "canonical_slug": null,
+      "context_window": { "total_tokens": 8000 },
+      "pricing": { "input_per_1m_tokens": null, "output_per_1m_tokens": null }
+    }
+  ]
+}

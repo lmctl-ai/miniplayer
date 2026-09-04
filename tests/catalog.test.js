@@ -1,0 +1,50 @@
+import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
+import test from 'node:test';
+
+import { listChatModels, loadCatalog, resolveModel } from '../src/catalog.js';
+
+const fixturePath = fileURLToPath(new URL('./fixtures/catalog.json', import.meta.url));
+
+test('loads the versioned catalog fixture without the production catalog', async () => {
+  const records = await loadCatalog(fixturePath);
+  assert.equal(records.length, 5);
+});
+
+test('filters chat models by source, provider, and maximum input price', async () => {
+  const records = await loadCatalog(fixturePath);
+  assert.deepEqual(
+    listChatModels(records, { source: 'openrouter' }).map((record) => record.record_id),
+    ['openrouter:vendor/fast'],
+  );
+  assert.deepEqual(
+    listChatModels(records, { provider: 'anthropic', maxInputPrice: 1 }).map((record) => record.record_id),
+    ['litellm:shared-a'],
+  );
+  assert.deepEqual(
+    listChatModels(records, { maxInputPrice: 0.1 }),
+    [],
+  );
+});
+
+test('resolves exactly one model across supported selector fields', async () => {
+  const records = await loadCatalog(fixturePath);
+  assert.equal(resolveModel(records, 'unique').record.record_id, 'litellm:unique-model');
+});
+
+test('rejects selectors with zero matches', async () => {
+  const records = await loadCatalog(fixturePath);
+  assert.throws(() => resolveModel(records, 'missing'), /No model matches selector/);
+});
+
+test('rejects selectors with more than one matching record', async () => {
+  const records = await loadCatalog(fixturePath);
+  assert.throws(() => resolveModel(records, 'shared'), /ambiguous \(2 matches/);
+});
+
+test('resolves aliases before exact catalog lookup', async () => {
+  const records = await loadCatalog(fixturePath);
+  const result = resolveModel(records, 'cheap', { cheap: 'vendor/fast' });
+  assert.equal(result.selector, 'vendor/fast');
+  assert.equal(result.record.record_id, 'openrouter:vendor/fast');
+});
