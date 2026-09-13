@@ -7,6 +7,7 @@ import { generateText } from 'ai';
 import { MiniplayerError } from './errors.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+const PASSTHROUGH_MODEL_ID = /^[A-Za-z0-9._:-]+$/;
 
 const LITELLM_PROVIDERS = {
   openai: {
@@ -64,7 +65,7 @@ export function createPassthroughRecord(selector) {
 
   const provider = selector.slice(0, separator);
   const modelId = selector.slice(separator + 1);
-  if (!LITELLM_PROVIDERS[provider]?.passthrough) return null;
+  if (!LITELLM_PROVIDERS[provider]?.passthrough || !PASSTHROUGH_MODEL_ID.test(modelId)) return null;
 
   return {
     record_id: `direct:${selector}`,

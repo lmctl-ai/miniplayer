@@ -46,3 +46,19 @@ test('unrouted provider prefixes and unknown bare ids retain catalog errors', as
     /No model matches selector "unknown-model"/,
   );
 });
+
+for (const selector of [
+  'deepseek/',
+  'deepseek//x',
+  'DeepSeek/x',
+  'deepseek/../../etc',
+  'deepseek/ ',
+]) {
+  test(`rejects unsafe passthrough selector ${JSON.stringify(selector)}`, async () => {
+    const records = await loadCatalog(fixturePath);
+    assert.throws(
+      () => resolveCallableModel(records, selector),
+      /No model matches selector/,
+    );
+  });
+}
