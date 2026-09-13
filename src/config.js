@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { MiniplayerError } from './errors.js';
+import { validatePool } from './selection.js';
 
 export function defaultConfigPath() {
   return join(homedir(), '.config', 'miniplayer', 'config.json');
@@ -33,6 +34,7 @@ export async function loadConfig(filePath = defaultConfigPath()) {
   if (config.provider !== undefined && (!config.provider || typeof config.provider !== 'object' || Array.isArray(config.provider))) {
     throw new MiniplayerError(`Config ${filePath} field "provider" must be an object`);
   }
+  if (config.pool !== undefined) validatePool(config.pool, filePath);
 
   return config;
 }
