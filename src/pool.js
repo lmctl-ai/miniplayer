@@ -58,11 +58,31 @@ export function createExecutionPlan({
   };
 }
 
-export function isRateLimitError(error) {
+const CONNECTIVITY_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_SOCKET',
+]);
+
+function errorChain(error) {
   const seen = new Set();
+  const chain = [];
   let current = error;
   while (current && !seen.has(current)) {
     seen.add(current);
+    chain.push(current);
+    current = current.cause;
+  }
+  return chain;
+}
+
+function isRateLimitError(error) {
+  for (const current of errorChain(error)) {
     if (current.statusCode === 429 || current.status === 429 || current.response?.status === 429) {
       return true;
     }
@@ -76,9 +96,24 @@ export function isRateLimitError(error) {
     if (/\b429\b|rate[\s_-]*limit|too many requests|quota exceeded|resource exhausted|exceeded[^\n]*quota/i.test(details)) {
       return true;
     }
-    current = current.cause;
   }
   return false;
+}
+
+export function isFailoverError(error) {
+  if (isRateLimitError(error)) return true;
+  const chain = errorChain(error);
+  const hasHttpFailure = chain.some((current) => {
+    const status = current.statusCode ?? current.status ?? current.response?.status;
+    return Number.isInteger(status) && status >= 400;
+  });
+  if (hasHttpFailure) return false;
+
+  return chain.some((current) => {
+    if (CONNECTIVITY_CODES.has(current.code) || CONNECTIVITY_CODES.has(current.cause?.code)) return true;
+    const details = [current.name, current.message, current.code].filter(Boolean).join(' ');
+    return /\bECONNREFUSED\b|\bECONNRESET\b|\bETIMEDOUT\b|\bEHOSTUNREACH\b|\bENETUNREACH\b|fetch failed|socket hang\s*up|network (?:error|request failed)|connection (?:refused|reset)|connect(?:ion)? timed out/i.test(details);
+  });
 }
 
 export async function generateFromSelection({
@@ -106,18 +141,18 @@ export async function generateFromSelection({
     }
   }
 
-  const rateLimited = [];
+  const failedOver = [];
   for (const candidate of plan.candidates) {
     try {
       return await generate({ record: candidate.record, config, prompt, env });
     } catch (error) {
-      if (!isRateLimitError(error)) throw error;
-      rateLimited.push(candidate);
-      debug?.(`pool model "${candidate.selector}" was rate-limited; trying next model`);
+      if (!isFailoverError(error)) throw error;
+      failedOver.push(candidate);
+      debug?.(`pool model "${candidate.selector}" hit a failover error; trying next model`);
     }
   }
 
-  const tried = describeCandidates(rateLimited, ' (rate-limited)');
+  const tried = describeCandidates(failedOver, ' (failover error)');
   const skipped = describeCandidates(plan.skipped);
   throw new MiniplayerError(`Provider pool exhausted; tried: ${tried}; skipped: ${skipped}`);
 }

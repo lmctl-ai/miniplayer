@@ -5,7 +5,7 @@ import test from 'node:test';
 
 import { loadCatalog } from '../src/catalog.js';
 import { main } from '../src/index.js';
-import { createExecutionPlan, generateFromSelection, isRateLimitError } from '../src/pool.js';
+import { createExecutionPlan, generateFromSelection, isFailoverError } from '../src/pool.js';
 
 const fixturePath = fileURLToPath(new URL('./fixtures/catalog.json', import.meta.url));
 
@@ -154,6 +154,29 @@ test('HTTP 401 fails after exactly one provider call with empty stdout', async (
   assert.match(io.output().stderr, /Unauthorized/);
 });
 
+test('ECONNREFUSED advances to the next pool candidate and exits 0', async () => {
+  const records = await fixtureRecords();
+  const calls = [];
+  const io = memoryIo();
+  const exitCode = await main(['run', 'hello'], io, {
+    loadConfig: async () => ({ pool: ['ollama/qwen2.5:14b', 'vendor/fast'] }),
+    loadCatalog: async () => records,
+    env: { OPENROUTER_API_KEY: 'or-key' },
+    random: () => 0.999,
+    generate: async ({ record }) => {
+      calls.push(record.record_id);
+      if (calls.length === 1) throw Object.assign(new Error('fetch failed'), {
+        cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+      });
+      return 'fallback-ok';
+    },
+  });
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls, ['direct:ollama/qwen2.5:14b', 'openrouter:vendor/fast']);
+  assert.equal(io.output().stdout, 'fallback-ok');
+  assert.equal(io.output().stderr, '');
+});
+
 test('pool skips unresolvable, ambiguous, and unroutable entries', async () => {
   const records = await fixtureRecords();
   const plan = createExecutionPlan({
@@ -212,10 +235,14 @@ test('injected environment reaches the generation call', async () => {
   });
 });
 
-test('quota-style nested SDK errors are recognized as rate limits', () => {
-  assert.equal(isRateLimitError(new Error('quota exceeded for this project')), true);
-  assert.equal(isRateLimitError(new Error('authentication failed')), false);
-  assert.equal(isRateLimitError({ cause: { response: { status: 429 } } }), true);
+test('only rate-limit and connectivity errors qualify for failover', () => {
+  assert.equal(isFailoverError(new Error('quota exceeded for this project')), true);
+  assert.equal(isFailoverError({ cause: { response: { status: 429 } } }), true);
+  assert.equal(isFailoverError(Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT' })), true);
+  assert.equal(isFailoverError(new Error('fetch failed')), true);
+  assert.equal(isFailoverError(Object.assign(new Error('Unauthorized'), { statusCode: 401 })), false);
+  assert.equal(isFailoverError(Object.assign(new Error('Server error'), { statusCode: 500 })), false);
+  assert.equal(isFailoverError(new Error('invalid model')), false);
 });
 
 test('full keyless pool exhaustion exits 1 and leaves stdout empty', async () => {
