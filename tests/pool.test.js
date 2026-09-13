@@ -24,6 +24,41 @@ function memoryIo(input = '') {
   };
 }
 
+function builtInCatalogRecords() {
+  return [
+    {
+      record_id: 'openrouter:deepseek/deepseek-v4-flash',
+      source: 'openrouter',
+      provider: 'deepseek',
+      mode: 'chat',
+      gateway_id: 'deepseek/deepseek-v4-flash',
+      vendor_model_id: null,
+      source_model_id: 'deepseek/deepseek-v4-flash',
+      canonical_slug: 'deepseek/deepseek-v4-flash-20260423',
+    },
+    {
+      record_id: 'litellm:deepseek-chat', source: 'litellm', provider: 'deepseek', mode: 'chat',
+      gateway_id: null, vendor_model_id: 'deepseek-chat', source_model_id: 'deepseek-chat', canonical_slug: null,
+    },
+    {
+      record_id: 'litellm:claude-haiku-4-5', source: 'litellm', provider: 'anthropic', mode: 'chat',
+      gateway_id: null, vendor_model_id: 'claude-haiku-4-5', source_model_id: 'claude-haiku-4-5', canonical_slug: null,
+    },
+    {
+      record_id: 'litellm:gemini/gemini-3.7-flash', source: 'litellm', provider: 'gemini', mode: 'chat',
+      gateway_id: null, vendor_model_id: 'gemini/gemini-3.7-flash', source_model_id: 'gemini/gemini-3.7-flash', canonical_slug: null,
+    },
+    {
+      record_id: 'litellm:gpt-5-nano', source: 'litellm', provider: 'openai', mode: 'chat',
+      gateway_id: null, vendor_model_id: 'gpt-5-nano', source_model_id: 'gpt-5-nano', canonical_slug: null,
+    },
+    {
+      record_id: 'litellm:moonshot/kimi-latest-8k', source: 'litellm', provider: 'moonshot', mode: 'chat',
+      gateway_id: null, vendor_model_id: 'moonshot/kimi-latest-8k', source_model_id: 'moonshot/kimi-latest-8k', canonical_slug: null,
+    },
+  ];
+}
+
 test('random pool selection always picks a member of the configured pool', async () => {
   const records = await fixtureRecords();
   const config = { pool: ['vendor/fast', 'unique'] };
@@ -121,4 +156,37 @@ test('classify uses the pool and preserves its one-line JSON contract', async ()
   assert.equal(exitCode, 0);
   assert.equal(io.output().stderr, '');
   assert.equal(io.output().stdout, '{"label":"task-done","reason":"More tasks remain","confidence":0.9}\n');
+});
+
+test('unconfigured selection always puts deepseek-flash first when its key exists', () => {
+  const plan = createExecutionPlan({
+    config: {},
+    records: builtInCatalogRecords(),
+    env: { DEEPSEEK_API_KEY: 'ds-key', OPENROUTER_API_KEY: 'or-key' },
+    random: () => 0,
+  });
+  assert.equal(plan.source, 'built-in-pool');
+  assert.equal(plan.candidates[0].selector, 'deepseek/deepseek-flash');
+  assert.equal(plan.candidates[0].record.vendor_model_id, 'deepseek-flash');
+});
+
+test('unconfigured primary fails over to another built-in after HTTP 429', async () => {
+  const calls = [];
+  const result = await generateFromSelection({
+    config: {},
+    records: builtInCatalogRecords(),
+    prompt: 'hello',
+    env: { DEEPSEEK_API_KEY: 'ds-key', OPENROUTER_API_KEY: 'or-key' },
+    random: () => 0.999,
+    generate: async ({ record }) => {
+      calls.push(record.record_id);
+      if (calls.length === 1) throw Object.assign(new Error('rate limited'), { statusCode: 429 });
+      return 'fallback-result';
+    },
+  });
+  assert.equal(result, 'fallback-result');
+  assert.deepEqual(calls, [
+    'direct:deepseek/deepseek-flash',
+    'openrouter:deepseek/deepseek-v4-flash',
+  ]);
 });
