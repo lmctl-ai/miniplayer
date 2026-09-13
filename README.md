@@ -75,7 +75,7 @@ Classify a team response from stdin (preferred) or a file:
 
 ```sh
 printf '%s\n' 'The assigned fix is complete; send the next task.' |
-  miniplayer classify -m codex/gpt-5.3-codex-spark
+  miniplayer classify -m claude-haiku-4-5
 miniplayer classify -m claude-haiku-4-5 --file response.txt
 ```
 

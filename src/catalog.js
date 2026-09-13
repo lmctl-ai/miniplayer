@@ -1,7 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import { resolveAlias } from './config.js';
 import { MiniplayerError } from './errors.js';
 
 const DEFAULT_CATALOG_URL = new URL('../../lmprice/dist/model_list.json', import.meta.url);
@@ -34,24 +33,6 @@ export async function loadCatalog(filePath = process.env.MINIPLAYER_LMPRICE_CATA
 
 export function findSelectorMatches(records, selector) {
   return records.filter((record) => SELECTOR_FIELDS.some((field) => record[field] === selector));
-}
-
-export function resolveModel(records, selector, aliases = {}) {
-  if (typeof selector !== 'string' || selector.length === 0) {
-    throw new MiniplayerError('A model selector is required');
-  }
-
-  const resolvedSelector = resolveAlias(selector, aliases);
-  const matches = findSelectorMatches(records, resolvedSelector);
-  if (matches.length === 0) {
-    throw new MiniplayerError(`No model matches selector "${resolvedSelector}"`);
-  }
-  if (matches.length > 1) {
-    const ids = matches.map((record) => record.record_id).join(', ');
-    throw new MiniplayerError(`Selector "${resolvedSelector}" is ambiguous (${matches.length} matches: ${ids})`);
-  }
-
-  return { record: matches[0], selector: resolvedSelector };
 }
 
 export function listChatModels(records, filters = {}) {
