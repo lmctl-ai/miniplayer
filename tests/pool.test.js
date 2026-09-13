@@ -123,6 +123,56 @@ test('HTTP 429 advances to the next randomized candidate', async () => {
   assert.deepEqual(calls, ['openrouter:vendor/fast', 'litellm:unique-model']);
 });
 
+test('HTTP 401 fails after exactly one provider call with empty stdout', async () => {
+  const records = await fixtureRecords();
+  const calls = [];
+  const io = memoryIo();
+  const exitCode = await main(['run', 'hello'], io, {
+    loadConfig: async () => ({ pool: ['vendor/fast', 'unique'] }),
+    loadCatalog: async () => records,
+    env: { OPENROUTER_API_KEY: 'or-key', OPENAI_API_KEY: 'oa-key' },
+    random: () => 0.999,
+    generate: async ({ record }) => {
+      calls.push(record.record_id);
+      throw Object.assign(new Error('Unauthorized'), { statusCode: 401 });
+    },
+  });
+  assert.equal(exitCode, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(io.output().stdout, '');
+  assert.match(io.output().stderr, /Unauthorized/);
+});
+
+test('pool skips unresolvable, ambiguous, and unroutable entries', async () => {
+  const records = await fixtureRecords();
+  const plan = createExecutionPlan({
+    config: { pool: ['missing-selector', 'shared', 'unsupported-model', 'vendor/fast'] },
+    records,
+    env: { OPENROUTER_API_KEY: 'or-key' },
+  });
+  assert.deepEqual(plan.candidates.map(({ selector }) => selector), ['vendor/fast']);
+  assert.equal(plan.skipped.length, 3);
+  assert.match(plan.skipped[0].reason, /No model matches/);
+  assert.match(plan.skipped[1].reason, /ambiguous/);
+  assert.match(plan.skipped[2].reason, /Unsupported litellm provider/);
+});
+
+test('injected environment reaches the generation call', async () => {
+  const records = await fixtureRecords();
+  const env = { OPENROUTER_API_KEY: 'injected-key' };
+  await generateFromSelection({
+    explicitSelector: 'vendor/fast',
+    config: {},
+    records,
+    prompt: 'hello',
+    env,
+    generate: async (options) => {
+      assert.equal(options.env, env);
+      return 'ok';
+    },
+  });
+});
+
 test('quota-style nested SDK errors are recognized as rate limits', () => {
   assert.equal(isRateLimitError(new Error('quota exceeded for this project')), true);
   assert.equal(isRateLimitError(new Error('authentication failed')), false);

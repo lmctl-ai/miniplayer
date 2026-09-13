@@ -150,8 +150,8 @@ export function createModel(record, config = {}, env = process.env) {
   return route.create(options)(route.modelId);
 }
 
-export async function generateOneShot({ record, config, prompt }) {
-  const model = createModel(record, config);
+export async function generateOneShot({ record, config, prompt, env = process.env }) {
+  const model = createModel(record, config, env);
   const result = await generateText({ model, prompt });
   return result.text;
 }

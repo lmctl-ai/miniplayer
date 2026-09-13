@@ -3,10 +3,10 @@ import { generateOneShot, hasProviderCredential } from './providers.js';
 import { resolveCallableModel } from './selector.js';
 import { resolveSelectionSource, shuffled } from './selection.js';
 
-function describeCandidates(candidates, suffix) {
+function describeCandidates(candidates, suffix = '') {
   return candidates.length === 0
     ? 'none'
-    : candidates.map(({ selector }) => `${selector}${suffix}`).join(', ');
+    : candidates.map(({ selector, reason }) => `${selector}${reason ? ` (${reason})` : suffix}`).join(', ');
 }
 
 export function createExecutionPlan({
@@ -18,8 +18,17 @@ export function createExecutionPlan({
 }) {
   const selection = resolveSelectionSource(explicitSelector, config);
   const unique = new Map();
+  const skipped = [];
   for (const selector of selection.selectors) {
-    const { record, selector: resolvedSelector } = resolveCallableModel(records, selector, config.aliases);
+    let resolved;
+    try {
+      resolved = resolveCallableModel(records, selector, config.aliases);
+    } catch (error) {
+      if (!selection.pool) throw error;
+      skipped.push({ selector, reason: error.message });
+      continue;
+    }
+    const { record, selector: resolvedSelector } = resolved;
     if (!unique.has(record.record_id)) {
       unique.set(record.record_id, { selector, resolvedSelector, record });
     }
@@ -27,14 +36,17 @@ export function createExecutionPlan({
   const resolved = [...unique.values()];
 
   if (!selection.pool) {
-    return { ...selection, candidates: resolved, skipped: [] };
+    return { ...selection, candidates: resolved, skipped };
   }
 
   const available = [];
-  const skipped = [];
   for (const candidate of resolved) {
-    if (hasProviderCredential(candidate.record, config, env)) available.push(candidate);
-    else skipped.push(candidate);
+    try {
+      if (hasProviderCredential(candidate.record, config, env)) available.push(candidate);
+      else skipped.push({ ...candidate, reason: 'no credential' });
+    } catch (error) {
+      skipped.push({ ...candidate, reason: error.message });
+    }
   }
 
   return {
@@ -82,17 +94,17 @@ export async function generateFromSelection({
   const plan = createExecutionPlan({ explicitSelector, config, records, env, random });
 
   if (!plan.pool) {
-    return generate({ record: plan.candidates[0].record, config, prompt });
+    return generate({ record: plan.candidates[0].record, config, prompt, env });
   }
 
   for (const candidate of plan.skipped) {
-    debug?.(`skipping pool model "${candidate.selector}": no provider credential`);
+    debug?.(`skipping pool model "${candidate.selector}": ${candidate.reason}`);
   }
 
   const rateLimited = [];
   for (const candidate of plan.candidates) {
     try {
-      return await generate({ record: candidate.record, config, prompt });
+      return await generate({ record: candidate.record, config, prompt, env });
     } catch (error) {
       if (!isRateLimitError(error)) throw error;
       rateLimited.push(candidate);
@@ -101,6 +113,6 @@ export async function generateFromSelection({
   }
 
   const tried = describeCandidates(rateLimited, ' (rate-limited)');
-  const skipped = describeCandidates(plan.skipped, ' (no credential)');
+  const skipped = describeCandidates(plan.skipped);
   throw new MiniplayerError(`Provider pool exhausted; tried: ${tried}; skipped: ${skipped}`);
 }
