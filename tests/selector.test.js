@@ -35,6 +35,14 @@ test('aliases resolve before direct provider passthrough', async () => {
   assert.equal(result.record.vendor_model_id, 'deepseek-flash');
 });
 
+test('ollama passthrough accepts colon-bearing local model ids', async () => {
+  const records = await loadCatalog(fixturePath);
+  const result = resolveCallableModel(records, 'ollama/qwen2.5:14b');
+  assert.equal(result.passthrough, true);
+  assert.equal(result.record.provider, 'ollama');
+  assert.equal(result.record.vendor_model_id, 'qwen2.5:14b');
+});
+
 test('unrouted provider prefixes and unknown bare ids retain catalog errors', async () => {
   const records = await loadCatalog(fixturePath);
   assert.throws(

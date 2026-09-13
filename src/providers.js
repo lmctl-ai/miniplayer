@@ -7,6 +7,7 @@ import { generateText } from 'ai';
 import { MiniplayerError } from './errors.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+const DEFAULT_OLLAMA_HOST = 'http://localhost:11434';
 const PASSTHROUGH_MODEL_ID = /^[A-Za-z0-9._:-]+$/;
 
 const LITELLM_PROVIDERS = {
@@ -56,6 +57,13 @@ const LITELLM_PROVIDERS = {
     kind: 'openai-compatible',
     baseURL: 'https://api.deepseek.com',
     passthrough: true,
+  },
+  ollama: {
+    configFallback: 'ollama',
+    kind: 'openai-compatible',
+    baseURL: (env) => `${(env.OLLAMA_HOST || DEFAULT_OLLAMA_HOST).replace(/\/+$/, '')}/v1`,
+    passthrough: true,
+    requiresApiKey: false,
   },
 };
 
@@ -118,8 +126,8 @@ export function resolveProviderRoute(record, config = {}, env = process.env) {
     return {
       ...mapping,
       name: record.provider,
-      baseURL: settings.baseURL || mapping.baseURL,
-      apiKey: env[mapping.envKey] || settings.apiKey,
+      baseURL: settings.baseURL || (typeof mapping.baseURL === 'function' ? mapping.baseURL(env) : mapping.baseURL),
+      apiKey: mapping.requiresApiKey === false ? 'ollama' : env[mapping.envKey] || settings.apiKey,
       modelId: litellmVendorModelId(record),
     };
   }

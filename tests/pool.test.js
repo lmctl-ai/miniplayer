@@ -86,6 +86,17 @@ test('keyless pool entries are skipped before generation', async () => {
   assert.deepEqual(plan.skipped.map(({ selector }) => selector), ['unique']);
 });
 
+test('ollama is planned without a host or API key', async () => {
+  const records = await fixtureRecords();
+  const plan = createExecutionPlan({
+    config: { pool: ['ollama/qwen2.5:14b'] },
+    records,
+    env: {},
+  });
+  assert.deepEqual(plan.candidates.map(({ selector }) => selector), ['ollama/qwen2.5:14b']);
+  assert.deepEqual(plan.skipped, []);
+});
+
 test('-m bypasses a configured pool entirely', async () => {
   const records = await fixtureRecords();
   const calls = [];

@@ -74,3 +74,35 @@ test('gemini routing prefix is removed before the native SDK factory receives th
   }, {}, { GOOGLE_GENERATIVE_AI_API_KEY: 'google-key' });
   assert.equal(model.modelId, 'gemini-3.7-flash');
 });
+
+test('ollama passthrough uses the injected host without requiring a credential', () => {
+  const record = {
+    record_id: 'direct:ollama/qwen2.5:14b',
+    source: 'litellm',
+    provider: 'ollama',
+    vendor_model_id: 'qwen2.5:14b',
+  };
+  const route = resolveProviderRoute(record, {}, { OLLAMA_HOST: 'http://172.18.32.1:11434/' });
+  assert.equal(route.kind, 'openai-compatible');
+  assert.equal(route.baseURL, 'http://172.18.32.1:11434/v1');
+  assert.equal(route.modelId, 'qwen2.5:14b');
+  assert.equal(route.apiKey, 'ollama');
+  const model = createModel(record, {}, {});
+  assert.equal(model.provider, 'ollama.chat');
+  assert.equal(model.modelId, 'qwen2.5:14b');
+});
+
+test('ollama defaults to localhost and honors a configured baseURL override', () => {
+  const record = {
+    record_id: 'litellm:ollama/codegeex4',
+    source: 'litellm',
+    provider: 'ollama',
+    vendor_model_id: 'ollama/codegeex4',
+  };
+  assert.equal(resolveProviderRoute(record, {}, {}).baseURL, 'http://localhost:11434/v1');
+  const configured = resolveProviderRoute(record, {
+    provider: { ollama: { baseURL: 'http://ollama.internal:9999/custom/v1' } },
+  }, { OLLAMA_HOST: 'http://ignored:11434' });
+  assert.equal(configured.baseURL, 'http://ollama.internal:9999/custom/v1');
+  assert.equal(configured.modelId, 'codegeex4');
+});
