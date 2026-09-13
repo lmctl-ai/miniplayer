@@ -44,6 +44,13 @@ lookup; matching is never fuzzy. Environment credentials take precedence over co
 | LiteLLM / Google | `gemini`, `google` | `GOOGLE_GENERATIVE_AI_API_KEY` |
 | LiteLLM / Moonshot | `moonshot` | `MOONSHOT_API_KEY` |
 | LiteLLM / DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` |
+| Local Ollama | `ollama` | `OLLAMA_HOST` (optional; no API key) |
+
+Ollama defaults to `http://localhost:11434/v1`. Set `OLLAMA_HOST` to the server origin, such as
+`http://172.18.32.1:11434`; miniplayer trims trailing slashes and appends `/v1`. A configured
+`provider.ollama.baseURL` overrides the derived URL. Select local models with passthrough IDs such as
+`ollama/qwen2.5:14b`. Ollama is always pool-eligible because it needs no credential; reachability is
+checked only when the call runs.
 
 ### Model selection and failover
 
@@ -53,14 +60,15 @@ Each invocation resolves models in this order:
 2. Config `pool` supplies randomized candidates.
 3. Config `model` supplies one default model.
 4. With neither, miniplayer first tries `deepseek/deepseek-flash`, then uses the remaining built-in
-   pool for rate-limit failover: `deepseek/deepseek-v4-flash-20260423`, `deepseek-chat`, `claude-haiku-4-5`,
+   pool for rate-limit or connectivity failover: `deepseek/deepseek-v4-flash-20260423`, `deepseek-chat`, `claude-haiku-4-5`,
    `gemini/gemini-3.7-flash`, `gpt-5-nano`, and `moonshot/kimi-latest-8k`.
 
 Pool entries without credentials are skipped. One eligible entry is chosen randomly, and another is
-tried only when the call reports HTTP 429, rate limiting, quota exhaustion, or an equivalent AI SDK
-rate-limit error. Authentication, invalid-model, and other errors fail immediately. Set
+tried only when the call reports HTTP 429, rate limiting, quota exhaustion, or a connectivity failure
+such as connection refusal, timeout, failed fetch, or socket hangup. HTTP 400/401/500, authentication,
+invalid-model, and other application errors fail immediately. Set
 `MINIPLAYER_DEBUG=1` to write skip and failover details to stderr. If no candidate succeeds, the
-exhaustion error names rate-limited and keyless candidates.
+exhaustion error names failed-over and skipped candidates.
 
 ## Commands
 
@@ -106,8 +114,9 @@ Call selectors resolve in three stages: config alias, exact catalog match, then 
 passthrough. Exact catalog matching checks `gateway_id`, `vendor_model_id`, `source_model_id`, and
 `canonical_slug`; no fuzzy matching occurs. If the catalog has no match, a selector shaped as
 `provider/model` may call `model` directly when `provider` is `deepseek`, `moonshot`, `openai`,
-`anthropic`, or `gemini`. This is why `deepseek/deepseek-flash` works even though it is absent from
-the catalog. Passthrough models are call-only and do not appear in `miniplayer models`.
+`anthropic`, `gemini`, or `ollama`. This is why `deepseek/deepseek-flash` and
+`ollama/qwen2.5:14b` work even when absent from the catalog. Passthrough models are call-only and do
+not appear in `miniplayer models` unless a matching catalog record also exists.
 
 Bare IDs such as `claude-haiku-4-5` work when that is the catalog value. Other provider-prefixed
 forms work only through an exact catalog value, a configured alias, or the approved passthrough rule.
