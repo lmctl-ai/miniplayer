@@ -39,7 +39,9 @@ export function createExecutionPlan({
 
   return {
     ...selection,
-    candidates: shuffled(available, random),
+    candidates: selection.source === 'built-in-pool' && available[0]?.selector === selection.selectors[0]
+      ? [available[0], ...shuffled(available.slice(1), random)]
+      : shuffled(available, random),
     skipped,
   };
 }
