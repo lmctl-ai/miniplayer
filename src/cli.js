@@ -122,7 +122,7 @@ export function formatModelTable(records) {
 
 async function runCommand(args, io, runtime) {
   const options = parseRunArgs(args);
-  const config = await runtime.loadConfig();
+  const config = await runtime.loadConfig(undefined, runtime.env);
   const prompt = requireText(options.prompt || await readStdin(io.stdin), 'Prompt');
   const records = await runtime.loadCatalog();
   const text = await generateFromSelection({
@@ -148,7 +148,7 @@ async function modelsCommand(args, io, runtime) {
 
 async function classifyCommand(args, io, runtime) {
   const options = parseClassifyArgs(args);
-  const config = await runtime.loadConfig();
+  const config = await runtime.loadConfig(undefined, runtime.env);
   let responseText;
   if (options.file) {
     try {
