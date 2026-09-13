@@ -134,6 +134,7 @@ async function runCommand(args, io, runtime) {
     random: runtime.random,
     generate: runtime.generate,
     debug: runtime.debug,
+    warn: runtime.warn,
   });
   io.stdout.write(text);
   return 0;
@@ -171,6 +172,7 @@ async function classifyCommand(args, io, runtime) {
     random: runtime.random,
     generate: runtime.generate,
     debug: runtime.debug,
+    warn: runtime.warn,
   });
   const classification = parseClassificationOutput(output);
   io.stdout.write(`${JSON.stringify(classification)}\n`);
@@ -197,6 +199,7 @@ export async function execute(args, io, dependencies = {}) {
     debug: env.MINIPLAYER_DEBUG
       ? (message) => io.stderr.write(`debug: ${message}\n`)
       : undefined,
+    warn: (message) => io.stderr.write(`warning: ${message}\n`),
   };
   const [command, ...commandArgs] = args;
   if (command === 'run') return runCommand(commandArgs, io, runtime);

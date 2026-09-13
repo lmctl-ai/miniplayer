@@ -46,7 +46,7 @@ function builtInCatalogRecords() {
     },
     {
       record_id: 'litellm:gemini/gemini-3.7-flash', source: 'litellm', provider: 'gemini', mode: 'chat',
-      gateway_id: null, vendor_model_id: 'gemini/gemini-3.7-flash', display_name: 'gemini-3.7-flash', source_model_id: 'gemini/gemini-3.7-flash', canonical_slug: null,
+      gateway_id: null, vendor_model_id: 'gemini/gemini-3.7-flash', source_model_id: 'gemini/gemini-3.7-flash', canonical_slug: null,
     },
     {
       record_id: 'litellm:gpt-5-nano', source: 'litellm', provider: 'openai', mode: 'chat',
@@ -54,7 +54,7 @@ function builtInCatalogRecords() {
     },
     {
       record_id: 'litellm:moonshot/kimi-latest-8k', source: 'litellm', provider: 'moonshot', mode: 'chat',
-      gateway_id: null, vendor_model_id: 'moonshot/kimi-latest-8k', display_name: 'kimi-latest-8k', source_model_id: 'moonshot/kimi-latest-8k', canonical_slug: null,
+      gateway_id: null, vendor_model_id: 'moonshot/kimi-latest-8k', source_model_id: 'moonshot/kimi-latest-8k', canonical_slug: null,
     },
   ];
 }
@@ -155,6 +155,34 @@ test('pool skips unresolvable, ambiguous, and unroutable entries', async () => {
   assert.match(plan.skipped[0].reason, /No model matches/);
   assert.match(plan.skipped[1].reason, /ambiguous/);
   assert.match(plan.skipped[2].reason, /Unsupported litellm provider/);
+});
+
+test('successful config pool warns once about skipped entries', async () => {
+  const records = await fixtureRecords();
+  const io = memoryIo();
+  const exitCode = await main(['run', 'hello'], io, {
+    loadConfig: async () => ({ pool: ['missing-selector', 'vendor/fast'] }),
+    loadCatalog: async () => records,
+    env: { OPENROUTER_API_KEY: 'key' },
+    generate: async () => 'ok',
+  });
+  assert.equal(exitCode, 0);
+  assert.equal(io.output().stdout, 'ok');
+  assert.match(io.output().stderr, /^warning: config pool skipped: missing-selector \(No model matches selector/);
+  assert.equal(io.output().stderr.trim().split('\n').length, 1);
+});
+
+test('successful built-in pool keeps keyless skips silent without debug mode', async () => {
+  const io = memoryIo();
+  const exitCode = await main(['run', 'hello'], io, {
+    loadConfig: async () => ({}),
+    loadCatalog: async () => builtInCatalogRecords(),
+    env: { DEEPSEEK_API_KEY: 'key' },
+    generate: async () => 'ok',
+  });
+  assert.equal(exitCode, 0);
+  assert.equal(io.output().stdout, 'ok');
+  assert.equal(io.output().stderr, '');
 });
 
 test('injected environment reaches the generation call', async () => {

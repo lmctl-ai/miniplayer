@@ -90,6 +90,7 @@ export async function generateFromSelection({
   random = Math.random,
   generate = generateOneShot,
   debug,
+  warn,
 }) {
   const plan = createExecutionPlan({ explicitSelector, config, records, env, random });
 
@@ -97,8 +98,12 @@ export async function generateFromSelection({
     return generate({ record: plan.candidates[0].record, config, prompt, env });
   }
 
-  for (const candidate of plan.skipped) {
-    debug?.(`skipping pool model "${candidate.selector}": ${candidate.reason}`);
+  if (plan.source === 'config-pool' && plan.skipped.length > 0) {
+    warn?.(`config pool skipped: ${describeCandidates(plan.skipped)}`);
+  } else {
+    for (const candidate of plan.skipped) {
+      debug?.(`skipping pool model "${candidate.selector}": ${candidate.reason}`);
+    }
   }
 
   const rateLimited = [];
