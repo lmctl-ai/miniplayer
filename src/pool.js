@@ -1,6 +1,6 @@
-import { resolveModel } from './catalog.js';
 import { MiniplayerError } from './errors.js';
 import { generateOneShot, hasProviderCredential } from './providers.js';
+import { resolveCallableModel } from './selector.js';
 import { resolveSelectionSource, shuffled } from './selection.js';
 
 function describeCandidates(candidates, suffix) {
@@ -19,7 +19,7 @@ export function createExecutionPlan({
   const selection = resolveSelectionSource(explicitSelector, config);
   const unique = new Map();
   for (const selector of selection.selectors) {
-    const { record, selector: resolvedSelector } = resolveModel(records, selector, config.aliases);
+    const { record, selector: resolvedSelector } = resolveCallableModel(records, selector, config.aliases);
     if (!unique.has(record.record_id)) {
       unique.set(record.record_id, { selector, resolvedSelector, record });
     }

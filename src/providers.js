@@ -14,6 +14,7 @@ const LITELLM_PROVIDERS = {
     configFallback: 'openai',
     kind: 'native',
     create: createOpenAI,
+    passthrough: true,
   },
   chatgpt: {
     envKey: 'OPENAI_API_KEY',
@@ -26,12 +27,14 @@ const LITELLM_PROVIDERS = {
     configFallback: 'anthropic',
     kind: 'native',
     create: createAnthropic,
+    passthrough: true,
   },
   gemini: {
     envKey: 'GOOGLE_GENERATIVE_AI_API_KEY',
     configFallback: 'gemini',
     kind: 'native',
     create: createGoogleGenerativeAI,
+    passthrough: true,
   },
   google: {
     envKey: 'GOOGLE_GENERATIVE_AI_API_KEY',
@@ -44,14 +47,36 @@ const LITELLM_PROVIDERS = {
     configFallback: 'moonshot',
     kind: 'openai-compatible',
     baseURL: 'https://api.moonshot.ai/v1',
+    passthrough: true,
   },
   deepseek: {
     envKey: 'DEEPSEEK_API_KEY',
     configFallback: 'deepseek',
     kind: 'openai-compatible',
     baseURL: 'https://api.deepseek.com',
+    passthrough: true,
   },
 };
+
+export function createPassthroughRecord(selector) {
+  const separator = selector.indexOf('/');
+  if (separator <= 0 || separator === selector.length - 1) return null;
+
+  const provider = selector.slice(0, separator);
+  const modelId = selector.slice(separator + 1);
+  if (!LITELLM_PROVIDERS[provider]?.passthrough) return null;
+
+  return {
+    record_id: `direct:${selector}`,
+    source: 'litellm',
+    provider,
+    mode: 'chat',
+    gateway_id: null,
+    vendor_model_id: modelId,
+    source_model_id: selector,
+    canonical_slug: null,
+  };
+}
 
 function providerConfig(config, name, fallback = name) {
   return config.provider?.[name] ?? config.provider?.[fallback] ?? {};
