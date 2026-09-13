@@ -19,20 +19,14 @@ The default catalog is `../lmprice/dist/model_list.json`. Set
 
 ## Configuration
 
-Configuration is optional and lives at `~/.config/miniplayer/config.json`. A minimal pool config is:
+Configuration is optional and lives at `~/.config/miniplayer/config.json`. With no config,
+`deepseek/deepseek-flash` is the primary model. It uses the metered DeepSeek API and
+`DEEPSEEK_API_KEY`, not a subscription provider. A minimal file-based credential config is:
 
 ```json
 {
-  "pool": [
-    "deepseek/deepseek-v4-flash-20260423",
-    "claude-haiku-4-5"
-  ],
-  "aliases": {
-    "dsh/deepseek-v4-flash": "deepseek/deepseek-v4-flash-20260423"
-  },
   "provider": {
-    "openrouter": { "apiKey": "..." },
-    "anthropic": { "apiKey": "..." }
+    "deepseek": { "apiKey": "..." }
   }
 }
 ```
@@ -56,8 +50,8 @@ Each invocation resolves models in this order:
 1. `-m <selector>` forces that model and bypasses every pool.
 2. Config `pool` supplies randomized candidates.
 3. Config `model` supplies one default model.
-4. With neither, miniplayer uses this built-in pool:
-   `deepseek/deepseek-v4-flash-20260423`, `deepseek-chat`, `claude-haiku-4-5`,
+4. With neither, miniplayer first tries `deepseek/deepseek-flash`, then uses the remaining built-in
+   pool for rate-limit failover: `deepseek/deepseek-v4-flash-20260423`, `deepseek-chat`, `claude-haiku-4-5`,
    `gemini/gemini-3.7-flash`, `gpt-5-nano`, and `moonshot/kimi-latest-8k`.
 
 Pool entries without credentials are skipped. One eligible entry is chosen randomly, and another is
@@ -106,12 +100,18 @@ code `0` means success. Exit code `1` covers usage, catalog, pool exhaustion, co
 credential, provider, and API errors. Exit code `2` is reserved for a model response that cannot be
 parsed as a valid classifier object.
 
-Selectors exact-match `gateway_id`, `vendor_model_id`, `source_model_id`, or `canonical_slug`.
-Bare IDs such as `claude-haiku-4-5` work when that is the catalog value. A prefixed form such as
-`provider/model` works only when the catalog field contains that exact prefix, or when config
-`aliases` maps it to an exact catalog selector. For example, `-m claude-haiku-4-5` is valid;
-`-m claude/claude-haiku-4-5` is not valid without an alias. No match and multiple matches are both
-errors; use a unique catalog selector or an explicit alias.
+Call selectors resolve in three stages: config alias, exact catalog match, then direct provider
+passthrough. Exact catalog matching checks `gateway_id`, `vendor_model_id`, `source_model_id`, and
+`canonical_slug`; no fuzzy matching occurs. If the catalog has no match, a selector shaped as
+`provider/model` may call `model` directly when `provider` is `deepseek`, `moonshot`, `openai`,
+`anthropic`, or `gemini`. This is why `deepseek/deepseek-flash` works even though it is absent from
+the catalog. Passthrough models are call-only and do not appear in `miniplayer models`.
+
+Bare IDs such as `claude-haiku-4-5` work when that is the catalog value. Other provider-prefixed
+forms work only through an exact catalog value, a configured alias, or the approved passthrough rule.
+For example, `-m claude-haiku-4-5` is a catalog match, while `-m claude/claude-haiku-4-5` would call
+the literal model ID `claude-haiku-4-5` only if `claude` were an approved passthrough provider—it is
+not. Unknown prefixes, unknown bare IDs, and ambiguous catalog matches are errors.
 
 ## Add a LiteLLM provider
 
