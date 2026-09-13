@@ -1,10 +1,11 @@
 import { readFile } from 'node:fs/promises';
 
-import { loadCatalog, listChatModels, modelListId, resolveModel } from './catalog.js';
+import { loadCatalog, listChatModels, modelListId } from './catalog.js';
 import { buildClassificationPrompt, parseClassificationOutput } from './classifier.js';
 import { loadConfig } from './config.js';
 import { MiniplayerError } from './errors.js';
 import { generateOneShot } from './providers.js';
+import { generateFromSelection } from './pool.js';
 
 export const HELP = `Usage:
   miniplayer run -m <selector> [prompt]
@@ -12,7 +13,7 @@ export const HELP = `Usage:
   miniplayer models [--source openrouter|litellm] [--provider <name>] [--max-input-price <number>]
   miniplayer --help
 
-Prompts and classification input default to stdin. A configured model is used when -m is omitted.
+Prompts and classification input default to stdin. Without -m, a configured or built-in pool is used.
 `;
 
 function takeOption(args, index, name) {
@@ -116,14 +117,21 @@ export function formatModelTable(records) {
   return `${rows.map((row) => row.map(formatCell).join('\t')).join('\n')}\n`;
 }
 
-async function runCommand(args, io) {
+async function runCommand(args, io, runtime) {
   const options = parseRunArgs(args);
-  const config = await loadConfig();
-  const selector = options.model ?? config.model;
+  const config = await runtime.loadConfig();
   const prompt = requireText(options.prompt || await readStdin(io.stdin), 'Prompt');
-  const records = await loadCatalog();
-  const { record } = resolveModel(records, selector, config.aliases);
-  const text = await generateOneShot({ record, config, prompt });
+  const records = await runtime.loadCatalog();
+  const text = await generateFromSelection({
+    explicitSelector: options.model,
+    config,
+    records,
+    prompt,
+    env: runtime.env,
+    random: runtime.random,
+    generate: runtime.generate,
+    debug: runtime.debug,
+  });
   io.stdout.write(text);
   return 0;
 }
@@ -135,10 +143,9 @@ async function modelsCommand(args, io) {
   return 0;
 }
 
-async function classifyCommand(args, io) {
+async function classifyCommand(args, io, runtime) {
   const options = parseClassifyArgs(args);
-  const config = await loadConfig();
-  const selector = options.model ?? config.model;
+  const config = await runtime.loadConfig();
   let responseText;
   if (options.file) {
     try {
@@ -151,27 +158,42 @@ async function classifyCommand(args, io) {
   }
   requireText(responseText, 'Classification input');
 
-  const records = await loadCatalog();
-  const { record } = resolveModel(records, selector, config.aliases);
-  const output = await generateOneShot({
-    record,
+  const records = await runtime.loadCatalog();
+  const output = await generateFromSelection({
+    explicitSelector: options.model,
     config,
+    records,
     prompt: buildClassificationPrompt(responseText),
+    env: runtime.env,
+    random: runtime.random,
+    generate: runtime.generate,
+    debug: runtime.debug,
   });
   const classification = parseClassificationOutput(output);
   io.stdout.write(`${JSON.stringify(classification)}\n`);
   return 0;
 }
 
-export async function execute(args, io) {
+export async function execute(args, io, dependencies = {}) {
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
     io.stdout.write(HELP);
     return 0;
   }
 
+  const env = dependencies.env ?? process.env;
+  const runtime = {
+    loadConfig: dependencies.loadConfig ?? loadConfig,
+    loadCatalog: dependencies.loadCatalog ?? loadCatalog,
+    generate: dependencies.generate ?? generateOneShot,
+    random: dependencies.random ?? Math.random,
+    env,
+    debug: env.MINIPLAYER_DEBUG
+      ? (message) => io.stderr.write(`debug: ${message}\n`)
+      : undefined,
+  };
   const [command, ...commandArgs] = args;
-  if (command === 'run') return runCommand(commandArgs, io);
+  if (command === 'run') return runCommand(commandArgs, io, runtime);
   if (command === 'models') return modelsCommand(commandArgs, io);
-  if (command === 'classify') return classifyCommand(commandArgs, io);
+  if (command === 'classify') return classifyCommand(commandArgs, io, runtime);
   throw new MiniplayerError(`Unknown command: ${command}`);
 }
