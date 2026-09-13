@@ -19,27 +19,26 @@ The default catalog is `../lmprice/dist/model_list.json`. Set
 
 ## Configuration
 
-Configuration is optional and lives at `~/.config/miniplayer/config.json`:
+Configuration is optional and lives at `~/.config/miniplayer/config.json`. A minimal pool config is:
 
 ```json
 {
-  "model": "codex/gpt-5.3-codex-spark",
+  "pool": [
+    "deepseek/deepseek-v4-flash-20260423",
+    "claude-haiku-4-5"
+  ],
   "aliases": {
-    "codex/gpt-5.3-codex-spark": "chatgpt/gpt-5.3-codex-spark",
-    "claude/claude-haiku-4-5": "claude-haiku-4-5",
     "dsh/deepseek-v4-flash": "deepseek/deepseek-v4-flash-20260423"
   },
   "provider": {
-    "openai": { "apiKey": "...", "baseURL": "https://api.openai.com/v1" },
-    "anthropic": { "apiKey": "..." },
-    "gemini": { "apiKey": "..." },
-    "openrouter": { "apiKey": "...", "baseURL": "https://openrouter.ai/api/v1" }
+    "openrouter": { "apiKey": "..." },
+    "anthropic": { "apiKey": "..." }
   }
 }
 ```
 
-Aliases are resolved before an exact catalog lookup. Catalog matching is never fuzzy. Environment
-credentials take precedence over config credentials:
+`model` may be used instead of `pool` for a single default. Aliases are resolved before exact catalog
+lookup; matching is never fuzzy. Environment credentials take precedence over config credentials:
 
 | Route | Supported catalog provider | Environment variable |
 | --- | --- | --- |
@@ -47,14 +46,33 @@ credentials take precedence over config credentials:
 | LiteLLM / OpenAI | `openai`, `chatgpt` | `OPENAI_API_KEY` |
 | LiteLLM / Anthropic | `anthropic` | `ANTHROPIC_API_KEY` |
 | LiteLLM / Google | `gemini`, `google` | `GOOGLE_GENERATIVE_AI_API_KEY` |
+| LiteLLM / Moonshot | `moonshot` | `MOONSHOT_API_KEY` |
+| LiteLLM / DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` |
+
+### Model selection and failover
+
+Each invocation resolves models in this order:
+
+1. `-m <selector>` forces that model and bypasses every pool.
+2. Config `pool` supplies randomized candidates.
+3. Config `model` supplies one default model.
+4. With neither, miniplayer uses this built-in pool:
+   `deepseek/deepseek-v4-flash-20260423`, `deepseek-chat`, `claude-haiku-4-5`,
+   `gemini/gemini-3.7-flash`, `gpt-5-nano`, and `moonshot/kimi-latest-8k`.
+
+Pool entries without credentials are skipped. One eligible entry is chosen randomly, and another is
+tried only when the call reports HTTP 429, rate limiting, quota exhaustion, or an equivalent AI SDK
+rate-limit error. Authentication, invalid-model, and other errors fail immediately. Set
+`MINIPLAYER_DEBUG=1` to write skip and failover details to stderr. If no candidate succeeds, the
+exhaustion error names rate-limited and keyless candidates.
 
 ## Commands
 
 Run a one-shot prompt from an argument or stdin:
 
 ```sh
-miniplayer run -m openai/gpt-4o-mini "Summarize this in one sentence"
-printf '%s\n' 'Summarize this' | miniplayer run -m openai/gpt-4o-mini
+miniplayer run -m gpt-5-nano "Summarize this in one sentence"
+printf '%s\n' 'Summarize this' | miniplayer run
 ```
 
 Classify a team response from stdin (preferred) or a file:
@@ -84,12 +102,16 @@ tokens.
 ## Output and errors
 
 Successful command results are the only content written to stdout. Diagnostics go to stderr. Exit
-code `1` covers usage, catalog, configuration, credential, provider, and API errors. Exit code `2` is
-reserved for a model response that cannot be parsed as a valid classifier object.
+code `0` means success. Exit code `1` covers usage, catalog, pool exhaustion, configuration,
+credential, provider, and API errors. Exit code `2` is reserved for a model response that cannot be
+parsed as a valid classifier object.
 
 Selectors exact-match `gateway_id`, `vendor_model_id`, `source_model_id`, or `canonical_slug`.
-No match and multiple matches are both errors; use a more specific catalog selector or an explicit
-alias.
+Bare IDs such as `claude-haiku-4-5` work when that is the catalog value. A prefixed form such as
+`provider/model` works only when the catalog field contains that exact prefix, or when config
+`aliases` maps it to an exact catalog selector. For example, `-m claude-haiku-4-5` is valid;
+`-m claude/claude-haiku-4-5` is not valid without an alias. No match and multiple matches are both
+errors; use a unique catalog selector or an explicit alias.
 
 ## Add a LiteLLM provider
 
