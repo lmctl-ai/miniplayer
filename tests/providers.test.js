@@ -38,15 +38,18 @@ test('environment credentials take precedence over config credentials', () => {
 });
 
 test('moonshot uses the snapshot baseURL and environment-first key wiring', () => {
-  const route = resolveProviderRoute({
+  const record = {
     record_id: 'litellm:moonshot/kimi-latest-8k',
     source: 'litellm',
     provider: 'moonshot',
     vendor_model_id: 'moonshot/kimi-latest-8k',
-  }, { provider: { moonshot: { apiKey: 'config-key' } } }, { MOONSHOT_API_KEY: 'env-key' });
+  };
+  const route = resolveProviderRoute(record, { provider: { moonshot: { apiKey: 'config-key' } } }, { MOONSHOT_API_KEY: 'env-key' });
   assert.equal(route.kind, 'openai-compatible');
   assert.equal(route.baseURL, 'https://api.moonshot.ai/v1');
   assert.equal(route.apiKey, 'env-key');
+  assert.equal(route.modelId, 'kimi-latest-8k');
+  assert.equal(createModel(record, {}, { MOONSHOT_API_KEY: 'env-key' }).modelId, 'kimi-latest-8k');
 });
 
 test('deepseek uses the snapshot baseURL and configured key fallback', () => {
@@ -59,4 +62,15 @@ test('deepseek uses the snapshot baseURL and configured key fallback', () => {
   assert.equal(route.kind, 'openai-compatible');
   assert.equal(route.baseURL, 'https://api.deepseek.com');
   assert.equal(route.apiKey, 'config-key');
+  assert.equal(route.modelId, 'deepseek-chat');
+});
+
+test('gemini routing prefix is removed before the native SDK factory receives the model id', () => {
+  const model = createModel({
+    record_id: 'litellm:gemini/gemini-3.7-flash',
+    source: 'litellm',
+    provider: 'gemini',
+    vendor_model_id: 'gemini/gemini-3.7-flash',
+  }, {}, { GOOGLE_GENERATIVE_AI_API_KEY: 'google-key' });
+  assert.equal(model.modelId, 'gemini-3.7-flash');
 });

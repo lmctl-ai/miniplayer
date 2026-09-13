@@ -82,6 +82,13 @@ function providerConfig(config, name, fallback = name) {
   return config.provider?.[name] ?? config.provider?.[fallback] ?? {};
 }
 
+function litellmVendorModelId(record) {
+  const routingPrefix = `${record.provider}/`;
+  return record.vendor_model_id.startsWith(routingPrefix)
+    ? record.vendor_model_id.slice(routingPrefix.length)
+    : record.vendor_model_id;
+}
+
 export function resolveProviderRoute(record, config = {}, env = process.env) {
   if (record.source === 'openrouter') {
     const settings = providerConfig(config, 'openrouter');
@@ -112,7 +119,7 @@ export function resolveProviderRoute(record, config = {}, env = process.env) {
       name: record.provider,
       baseURL: settings.baseURL || mapping.baseURL,
       apiKey: env[mapping.envKey] || settings.apiKey,
-      modelId: record.vendor_model_id,
+      modelId: litellmVendorModelId(record),
     };
   }
 

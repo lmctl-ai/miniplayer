@@ -46,7 +46,7 @@ function builtInCatalogRecords() {
     },
     {
       record_id: 'litellm:gemini/gemini-3.7-flash', source: 'litellm', provider: 'gemini', mode: 'chat',
-      gateway_id: null, vendor_model_id: 'gemini/gemini-3.7-flash', source_model_id: 'gemini/gemini-3.7-flash', canonical_slug: null,
+      gateway_id: null, vendor_model_id: 'gemini/gemini-3.7-flash', display_name: 'gemini-3.7-flash', source_model_id: 'gemini/gemini-3.7-flash', canonical_slug: null,
     },
     {
       record_id: 'litellm:gpt-5-nano', source: 'litellm', provider: 'openai', mode: 'chat',
@@ -54,7 +54,7 @@ function builtInCatalogRecords() {
     },
     {
       record_id: 'litellm:moonshot/kimi-latest-8k', source: 'litellm', provider: 'moonshot', mode: 'chat',
-      gateway_id: null, vendor_model_id: 'moonshot/kimi-latest-8k', source_model_id: 'moonshot/kimi-latest-8k', canonical_slug: null,
+      gateway_id: null, vendor_model_id: 'moonshot/kimi-latest-8k', display_name: 'kimi-latest-8k', source_model_id: 'moonshot/kimi-latest-8k', canonical_slug: null,
     },
   ];
 }
