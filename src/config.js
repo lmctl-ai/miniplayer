@@ -9,7 +9,7 @@ export function defaultConfigPath() {
   return join(homedir(), '.config', 'miniplayer', 'config.json');
 }
 
-export async function loadConfig(filePath = defaultConfigPath()) {
+export async function loadConfig(filePath = process.env.MINIPLAYER_CONFIG || defaultConfigPath()) {
   let contents;
   try {
     contents = await readFile(filePath, 'utf8');

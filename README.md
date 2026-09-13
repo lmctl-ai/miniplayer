@@ -31,6 +31,8 @@ Configuration is optional and lives at `~/.config/miniplayer/config.json`. With 
 }
 ```
 
+Set `MINIPLAYER_CONFIG=/path/to/config.json` to use an alternate config path.
+
 `model` may be used instead of `pool` for a single default. Aliases are resolved before exact catalog
 lookup; matching is never fuzzy. Environment credentials take precedence over config credentials:
 
