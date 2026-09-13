@@ -29,7 +29,10 @@ function parseRunArgs(args) {
   const prompt = [];
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (arg === '-m' || arg === '--model') {
+    if (arg === '--') {
+      prompt.push(...args.slice(index + 1));
+      break;
+    } else if (arg === '-m' || arg === '--model') {
       model = takeOption(args, index, arg);
       index += 1;
     } else if (arg.startsWith('-')) {
@@ -136,9 +139,9 @@ async function runCommand(args, io, runtime) {
   return 0;
 }
 
-async function modelsCommand(args, io) {
+async function modelsCommand(args, io, runtime) {
   const filters = parseModelsArgs(args);
-  const records = await loadCatalog();
+  const records = await runtime.loadCatalog();
   io.stdout.write(formatModelTable(listChatModels(records, filters)));
   return 0;
 }
@@ -175,7 +178,11 @@ async function classifyCommand(args, io, runtime) {
 }
 
 export async function execute(args, io, dependencies = {}) {
-  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+  if (args.length === 0) {
+    io.stderr.write(HELP);
+    return 1;
+  }
+  if (args[0] === '--help' || args[0] === '-h') {
     io.stdout.write(HELP);
     return 0;
   }
@@ -193,7 +200,7 @@ export async function execute(args, io, dependencies = {}) {
   };
   const [command, ...commandArgs] = args;
   if (command === 'run') return runCommand(commandArgs, io, runtime);
-  if (command === 'models') return modelsCommand(commandArgs, io);
+  if (command === 'models') return modelsCommand(commandArgs, io, runtime);
   if (command === 'classify') return classifyCommand(commandArgs, io, runtime);
   throw new MiniplayerError(`Unknown command: ${command}`);
 }

@@ -9,32 +9,34 @@ export function defaultConfigPath() {
   return join(homedir(), '.config', 'miniplayer', 'config.json');
 }
 
-export async function loadConfig(filePath = process.env.MINIPLAYER_CONFIG || defaultConfigPath()) {
+export async function loadConfig(filePath, env = process.env) {
+  const explicitPath = filePath ?? env.MINIPLAYER_CONFIG;
+  const resolvedPath = explicitPath ?? defaultConfigPath();
   let contents;
   try {
-    contents = await readFile(filePath, 'utf8');
+    contents = await readFile(resolvedPath, 'utf8');
   } catch (error) {
-    if (error.code === 'ENOENT') return {};
-    throw new MiniplayerError(`Unable to read config ${filePath}: ${error.message}`);
+    if (error.code === 'ENOENT' && explicitPath === undefined) return {};
+    throw new MiniplayerError(`Unable to read config ${resolvedPath}: ${error.message}`);
   }
 
   let config;
   try {
     config = JSON.parse(contents);
   } catch (error) {
-    throw new MiniplayerError(`Invalid JSON in config ${filePath}: ${error.message}`);
+    throw new MiniplayerError(`Invalid JSON in config ${resolvedPath}: ${error.message}`);
   }
 
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
-    throw new MiniplayerError(`Config ${filePath} must contain a JSON object`);
+    throw new MiniplayerError(`Config ${resolvedPath} must contain a JSON object`);
   }
   if (config.aliases !== undefined && (!config.aliases || typeof config.aliases !== 'object' || Array.isArray(config.aliases))) {
-    throw new MiniplayerError(`Config ${filePath} field "aliases" must be an object`);
+    throw new MiniplayerError(`Config ${resolvedPath} field "aliases" must be an object`);
   }
   if (config.provider !== undefined && (!config.provider || typeof config.provider !== 'object' || Array.isArray(config.provider))) {
-    throw new MiniplayerError(`Config ${filePath} field "provider" must be an object`);
+    throw new MiniplayerError(`Config ${resolvedPath} field "provider" must be an object`);
   }
-  if (config.pool !== undefined) validatePool(config.pool, filePath);
+  if (config.pool !== undefined) validatePool(config.pool, resolvedPath);
 
   return config;
 }
