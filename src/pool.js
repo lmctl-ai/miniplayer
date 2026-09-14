@@ -53,11 +53,19 @@ export function createExecutionPlan({
     ...selection,
     candidates: selection.source === 'config-pool' && selection.ordered
       ? available
-      : selection.source === 'built-in-pool' && available[0]?.selector === selection.selectors[0]
-        ? [available[0], ...shuffled(available.slice(1), random)]
+      : selection.source === 'built-in-pool'
+        ? orderBuiltInCandidates(available, selection.selectors, random)
         : shuffled(available, random),
     skipped,
   };
+}
+
+function orderBuiltInCandidates(available, selectors, random) {
+  const pinnedSelectors = selectors.slice(0, 2);
+  const bySelector = new Map(available.map((candidate) => [candidate.selector, candidate]));
+  const pinned = pinnedSelectors.flatMap((selector) => bySelector.has(selector) ? [bySelector.get(selector)] : []);
+  const rest = available.filter((candidate) => !pinnedSelectors.includes(candidate.selector));
+  return [...pinned, ...shuffled(rest, random)];
 }
 
 const CONNECTIVITY_CODES = new Set([

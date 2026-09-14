@@ -339,19 +339,36 @@ test('classify uses the pool and preserves its one-line JSON contract', async ()
   assert.equal(io.output().stdout, '{"label":"task-done","reason":"More tasks remain","confidence":0.9}\n');
 });
 
-test('unconfigured selection always puts deepseek-flash first when its key exists', () => {
-  const plan = createExecutionPlan({
-    config: {},
-    records: builtInCatalogRecords(),
-    env: { DEEPSEEK_API_KEY: 'ds-key', OPENROUTER_API_KEY: 'or-key' },
-    random: () => 0,
-  });
-  assert.equal(plan.source, 'built-in-pool');
-  assert.equal(plan.candidates[0].selector, 'deepseek/deepseek-flash');
-  assert.equal(plan.candidates[0].record.vendor_model_id, 'deepseek-flash');
+test('built-in pool pins ollama first and deepseek second across 200 shuffles', () => {
+  const permutations = new Set();
+  for (let iteration = 0; iteration < 200; iteration += 1) {
+    let state = iteration + 1;
+    const random = () => {
+      state = (state * 16807) % 2147483647;
+      return (state - 1) / 2147483646;
+    };
+    const plan = createExecutionPlan({
+      config: {},
+      records: builtInCatalogRecords(),
+      env: {
+        DEEPSEEK_API_KEY: 'ds-key',
+        OPENROUTER_API_KEY: 'or-key',
+        OPENAI_API_KEY: 'oa-key',
+        ANTHROPIC_API_KEY: 'an-key',
+        GOOGLE_GENERATIVE_AI_API_KEY: 'go-key',
+        MOONSHOT_API_KEY: 'mo-key',
+      },
+      random,
+    });
+    assert.equal(plan.source, 'built-in-pool');
+    assert.equal(plan.candidates[0].selector, 'ollama/qwen2.5:14b');
+    assert.equal(plan.candidates[1].selector, 'deepseek/deepseek-flash');
+    permutations.add(plan.candidates.slice(2).map(({ selector }) => selector).join(','));
+  }
+  assert.ok(permutations.size > 1, 'remaining built-in candidates should be shuffled');
 });
 
-test('unconfigured primary fails over to another built-in after HTTP 429', async () => {
+test('unconfigured ollama primary fails over to metered deepseek after HTTP 429', async () => {
   const calls = [];
   const result = await generateFromSelection({
     config: {},
@@ -367,7 +384,7 @@ test('unconfigured primary fails over to another built-in after HTTP 429', async
   });
   assert.equal(result, 'fallback-result');
   assert.deepEqual(calls, [
+    'direct:ollama/qwen2.5:14b',
     'direct:deepseek/deepseek-flash',
-    'openrouter:deepseek/deepseek-v4-flash',
   ]);
 });

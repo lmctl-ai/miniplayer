@@ -1,6 +1,7 @@
 import { MiniplayerError } from './errors.js';
 
 export const BUILT_IN_POOL = Object.freeze([
+  'ollama/qwen2.5:14b',
   'deepseek/deepseek-flash',
   'deepseek/deepseek-v4-flash-20260423',
   'deepseek-chat',
