@@ -20,11 +20,13 @@ The default catalog is `../lmprice/dist/model_list.json`. Set
 ## Configuration
 
 Configuration is optional and lives at `~/.config/miniplayer/config.json`. With no config,
-`deepseek/deepseek-flash` is the primary model. It uses the metered DeepSeek API and
-`DEEPSEEK_API_KEY`, not a subscription provider. A minimal file-based credential config is:
+`ollama/qwen2.5:14b` is the primary model and metered `deepseek/deepseek-flash` is its first
+failover. Local-first is free, offloads inference compute, and avoids burning subscription rate
+limits. A minimal file-based DeepSeek credential config is:
 
 ```json
 {
+  "requestTimeoutMs": 60000,
   "provider": {
     "deepseek": { "apiKey": "..." }
   }
@@ -32,6 +34,9 @@ Configuration is optional and lives at `~/.config/miniplayer/config.json`. With 
 ```
 
 Set `MINIPLAYER_CONFIG=/path/to/config.json` to use an alternate config path.
+Every provider call has a 60,000 ms total timeout. Set positive-integer config `requestTimeoutMs` or
+environment `MINIPLAYER_REQUEST_TIMEOUT_MS` to override it; the environment value wins. Invalid,
+zero, negative, or excessively large values are configuration errors.
 
 `model` may be used instead of `pool` for a single default. Aliases are resolved before exact catalog
 lookup; matching is never fuzzy. Environment credentials take precedence over config credentials:
@@ -73,19 +78,21 @@ Each invocation resolves models in this order:
    `poolOrdered: true`, the first resolvable, credentialed entry wins and later entries are
    failover-only.
 3. Config `model` supplies one default model.
-4. With neither, miniplayer first tries `deepseek/deepseek-flash`, then uses the remaining built-in
-   pool for rate-limit or connectivity failover: `deepseek/deepseek-v4-flash-20260423`, `deepseek-chat`, `claude-haiku-4-5`,
+4. With neither, miniplayer first tries `ollama/qwen2.5:14b`, then metered
+   `deepseek/deepseek-flash`. It shuffles the remaining built-in pool for rate-limit, timeout, or
+   connectivity failover: `deepseek/deepseek-v4-flash-20260423`, `deepseek-chat`, `claude-haiku-4-5`,
    `gemini/gemini-3.7-flash`, `gpt-5-nano`, and `moonshot/kimi-latest-8k`.
 
 Pool entries without credentials are skipped. One eligible entry is chosen randomly, and another is
-tried only when the call reports HTTP 429, rate limiting, quota exhaustion, or a connectivity failure
-such as connection refusal, timeout, failed fetch, or socket hangup. HTTP 400/401/500, authentication,
-invalid-model, and other application errors fail immediately. Set
+tried only when the call reports HTTP 429, rate limiting, quota exhaustion, an AbortSignal timeout,
+or a connectivity failure such as connection refusal, failed fetch, or socket hangup. The timeout
+covers the complete SDK call, including a response that hangs after connecting. HTTP 400/401/500,
+authentication, invalid-model, and other application errors fail immediately. Set
 `MINIPLAYER_DEBUG=1` to write skip and failover details to stderr. If no candidate succeeds, the
 exhaustion error names failed-over and skipped candidates.
 
 `poolOrdered` governs only operator-authored `pool` arrays and defaults to `false`. It does not alter
-the built-in pool, which keeps DeepSeek Flash pinned first and randomizes its remaining fallbacks.
+the built-in pool, which pins local Qwen first and DeepSeek Flash second before random fallbacks.
 Skipped configured entries still produce one stderr warning with their reasons.
 
 ## Commands
