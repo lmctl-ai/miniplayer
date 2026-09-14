@@ -20,3 +20,10 @@ test('malformed config JSON is an error', async () => {
 test('non-object config is an error', async () => {
   await assert.rejects(loadConfig(fixture('config-array.json')), /must contain a JSON object/);
 });
+
+test('poolOrdered must be boolean when configured', async () => {
+  await assert.rejects(
+    loadConfig(fixture('config-ordered-invalid.json')),
+    /field "poolOrdered" must be a boolean/,
+  );
+});

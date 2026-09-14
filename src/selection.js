@@ -15,7 +15,12 @@ export function resolveSelectionSource(explicitSelector, config = {}) {
     return { selectors: [explicitSelector], pool: false, source: 'flag' };
   }
   if (config.pool !== undefined) {
-    return { selectors: [...config.pool], pool: true, source: 'config-pool' };
+    return {
+      selectors: [...config.pool],
+      pool: true,
+      ordered: config.poolOrdered === true,
+      source: 'config-pool',
+    };
   }
   if (config.model !== undefined) {
     return { selectors: [config.model], pool: false, source: 'config-model' };

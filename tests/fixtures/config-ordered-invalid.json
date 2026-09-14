@@ -1,0 +1,4 @@
+{
+  "pool": ["vendor/fast"],
+  "poolOrdered": "yes"
+}

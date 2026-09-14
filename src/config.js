@@ -37,6 +37,9 @@ export async function loadConfig(filePath, env = process.env) {
     throw new MiniplayerError(`Config ${resolvedPath} field "provider" must be an object`);
   }
   if (config.pool !== undefined) validatePool(config.pool, resolvedPath);
+  if (config.poolOrdered !== undefined && typeof config.poolOrdered !== 'boolean') {
+    throw new MiniplayerError(`Config ${resolvedPath} field "poolOrdered" must be a boolean`);
+  }
 
   return config;
 }

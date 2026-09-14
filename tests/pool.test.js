@@ -75,6 +75,49 @@ test('random pool selection always picks a member of the configured pool', async
   }
 });
 
+test('ordered pool always calls its first healthy entry', async () => {
+  const records = await fixtureRecords();
+  for (const random of [() => 0, () => 0.999]) {
+    const calls = [];
+    const result = await generateFromSelection({
+      config: { pool: ['vendor/fast', 'unique'], poolOrdered: true },
+      records,
+      prompt: 'hello',
+      env: { OPENROUTER_API_KEY: 'or-key', OPENAI_API_KEY: 'oa-key' },
+      random,
+      generate: async ({ record }) => {
+        calls.push(record.record_id);
+        return 'primary-ok';
+      },
+    });
+    assert.equal(result, 'primary-ok');
+    assert.deepEqual(calls, ['openrouter:vendor/fast']);
+  }
+});
+
+for (const failure of [
+  Object.assign(new Error('Too many requests'), { statusCode: 429 }),
+  Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+]) {
+  test(`ordered pool reaches its second entry after ${failure.code ?? failure.statusCode}`, async () => {
+    const records = await fixtureRecords();
+    const calls = [];
+    const result = await generateFromSelection({
+      config: { pool: ['vendor/fast', 'unique'], poolOrdered: true },
+      records,
+      prompt: 'hello',
+      env: { OPENROUTER_API_KEY: 'or-key', OPENAI_API_KEY: 'oa-key' },
+      generate: async ({ record }) => {
+        calls.push(record.record_id);
+        if (calls.length === 1) throw failure;
+        return 'fallback-ok';
+      },
+    });
+    assert.equal(result, 'fallback-ok');
+    assert.deepEqual(calls, ['openrouter:vendor/fast', 'litellm:unique-model']);
+  });
+}
+
 test('keyless pool entries are skipped before generation', async () => {
   const records = await fixtureRecords();
   const plan = createExecutionPlan({
@@ -204,6 +247,28 @@ test('successful config pool warns once about skipped entries', async () => {
   assert.equal(io.output().stdout, 'ok');
   assert.match(io.output().stderr, /^warning: config pool skipped: missing-selector \(No model matches selector/);
   assert.equal(io.output().stderr.trim().split('\n').length, 1);
+});
+
+test('ordered pool skips an unresolvable primary, warns, and calls the second entry', async () => {
+  const records = await fixtureRecords();
+  const io = memoryIo();
+  const calls = [];
+  const exitCode = await main(['run', 'hello'], io, {
+    loadConfig: async () => ({
+      pool: ['missing-selector', 'vendor/fast'],
+      poolOrdered: true,
+    }),
+    loadCatalog: async () => records,
+    env: { OPENROUTER_API_KEY: 'key' },
+    generate: async ({ record }) => {
+      calls.push(record.record_id);
+      return 'fallback-ok';
+    },
+  });
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls, ['openrouter:vendor/fast']);
+  assert.equal(io.output().stdout, 'fallback-ok');
+  assert.match(io.output().stderr, /^warning: config pool skipped: missing-selector/);
 });
 
 test('successful built-in pool keeps keyless skips silent without debug mode', async () => {
