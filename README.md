@@ -52,12 +52,26 @@ Ollama defaults to `http://localhost:11434/v1`. Set `OLLAMA_HOST` to the server 
 `ollama/qwen2.5:14b`. Ollama is always pool-eligible because it needs no credential; reachability is
 checked only when the call runs.
 
+To make local Ollama the strict primary and metered DeepSeek failover-only, configure:
+
+```json
+{
+  "pool": ["ollama/qwen2.5:14b", "deepseek/deepseek-flash"],
+  "poolOrdered": true,
+  "provider": {
+    "deepseek": { "apiKey": "..." }
+  }
+}
+```
+
 ### Model selection and failover
 
 Each invocation resolves models in this order:
 
 1. `-m <selector>` forces that model and bypasses every pool.
-2. Config `pool` supplies randomized candidates.
+2. Config `pool` supplies candidates. By default they are randomized for load spreading. With
+   `poolOrdered: true`, the first resolvable, credentialed entry wins and later entries are
+   failover-only.
 3. Config `model` supplies one default model.
 4. With neither, miniplayer first tries `deepseek/deepseek-flash`, then uses the remaining built-in
    pool for rate-limit or connectivity failover: `deepseek/deepseek-v4-flash-20260423`, `deepseek-chat`, `claude-haiku-4-5`,
@@ -69,6 +83,10 @@ such as connection refusal, timeout, failed fetch, or socket hangup. HTTP 400/40
 invalid-model, and other application errors fail immediately. Set
 `MINIPLAYER_DEBUG=1` to write skip and failover details to stderr. If no candidate succeeds, the
 exhaustion error names failed-over and skipped candidates.
+
+`poolOrdered` governs only operator-authored `pool` arrays and defaults to `false`. It does not alter
+the built-in pool, which keeps DeepSeek Flash pinned first and randomizes its remaining fallbacks.
+Skipped configured entries still produce one stderr warning with their reasons.
 
 ## Commands
 
