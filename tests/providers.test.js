@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createModel, resolveProviderRoute } from '../src/providers.js';
+import { createModel, generateOneShot, resolveProviderRoute } from '../src/providers.js';
 
 test('rejects unmapped litellm providers cleanly', () => {
   assert.throws(
@@ -105,4 +105,27 @@ test('ollama defaults to localhost and honors a configured baseURL override', ()
   }, { OLLAMA_HOST: 'http://ignored:11434' });
   assert.equal(configured.baseURL, 'http://ollama.internal:9999/custom/v1');
   assert.equal(configured.modelId, 'codegeex4');
+});
+
+test('one-shot generation passes a finite AbortSignal to the AI SDK call', async () => {
+  const result = await generateOneShot({
+    record: {
+      record_id: 'direct:ollama/qwen2.5:14b',
+      source: 'litellm',
+      provider: 'ollama',
+      vendor_model_id: 'qwen2.5:14b',
+    },
+    config: {},
+    prompt: 'hello',
+    env: { MINIPLAYER_REQUEST_TIMEOUT_MS: '25' },
+    generateText: async ({ abortSignal }) => {
+      assert.ok(abortSignal instanceof AbortSignal);
+      assert.equal(abortSignal.aborted, false);
+      await new Promise((resolve) => setTimeout(resolve, 35));
+      assert.equal(abortSignal.aborted, true);
+      assert.equal(abortSignal.reason.name, 'TimeoutError');
+      return { text: 'ok' };
+    },
+  });
+  assert.equal(result, 'ok');
 });

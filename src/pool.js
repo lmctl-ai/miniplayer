@@ -77,6 +77,8 @@ const CONNECTIVITY_CODES = new Set([
   'UND_ERR_CONNECT_TIMEOUT',
   'UND_ERR_HEADERS_TIMEOUT',
   'UND_ERR_SOCKET',
+  'ABORT_ERR',
+  'UND_ERR_ABORTED',
 ]);
 
 function errorChain(error) {
@@ -122,7 +124,7 @@ export function isFailoverError(error) {
   return chain.some((current) => {
     if (CONNECTIVITY_CODES.has(current.code) || CONNECTIVITY_CODES.has(current.cause?.code)) return true;
     const details = [current.name, current.message, current.code].filter(Boolean).join(' ');
-    return /\bECONNREFUSED\b|\bECONNRESET\b|\bETIMEDOUT\b|\bEHOSTUNREACH\b|\bENETUNREACH\b|fetch failed|socket hang\s*up|network (?:error|request failed)|connection (?:refused|reset)|connect(?:ion)? timed out/i.test(details);
+    return /\bAbortError\b|\bTimeoutError\b|\bECONNREFUSED\b|\bECONNRESET\b|\bETIMEDOUT\b|\bEHOSTUNREACH\b|\bENETUNREACH\b|fetch failed|socket hang\s*up|network (?:error|request failed)|connection (?:refused|reset)|connect(?:ion)? timed out|operation was aborted|request (?:aborted|timed out)/i.test(details);
   });
 }
 

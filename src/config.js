@@ -5,6 +5,27 @@ import { join } from 'node:path';
 import { MiniplayerError } from './errors.js';
 import { validatePool } from './selection.js';
 
+export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+const MAX_REQUEST_TIMEOUT_MS = 2_147_483_647;
+
+function parseRequestTimeout(value, source, allowString) {
+  const parsed = allowString && typeof value === 'string' ? Number(value) : value;
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > MAX_REQUEST_TIMEOUT_MS) {
+    throw new MiniplayerError(`${source} must be a positive integer no greater than ${MAX_REQUEST_TIMEOUT_MS}`);
+  }
+  return parsed;
+}
+
+export function resolveRequestTimeoutMs(config = {}, env = process.env) {
+  if (env.MINIPLAYER_REQUEST_TIMEOUT_MS !== undefined) {
+    return parseRequestTimeout(env.MINIPLAYER_REQUEST_TIMEOUT_MS, 'MINIPLAYER_REQUEST_TIMEOUT_MS', true);
+  }
+  if (config.requestTimeoutMs !== undefined) {
+    return parseRequestTimeout(config.requestTimeoutMs, 'Config field "requestTimeoutMs"', false);
+  }
+  return DEFAULT_REQUEST_TIMEOUT_MS;
+}
+
 export function defaultConfigPath() {
   return join(homedir(), '.config', 'miniplayer', 'config.json');
 }
@@ -40,6 +61,7 @@ export async function loadConfig(filePath, env = process.env) {
   if (config.poolOrdered !== undefined && typeof config.poolOrdered !== 'boolean') {
     throw new MiniplayerError(`Config ${resolvedPath} field "poolOrdered" must be a boolean`);
   }
+  if (config.requestTimeoutMs !== undefined) resolveRequestTimeoutMs(config, {});
 
   return config;
 }

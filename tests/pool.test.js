@@ -220,6 +220,29 @@ test('ECONNREFUSED advances to the next pool candidate and exits 0', async () =>
   assert.equal(io.output().stderr, '');
 });
 
+test('AbortSignal timeout on the primary advances to the second candidate', async () => {
+  const records = await fixtureRecords();
+  const calls = [];
+  const io = memoryIo();
+  const exitCode = await main(['run', 'hello'], io, {
+    loadConfig: async () => ({
+      pool: ['ollama/qwen2.5:14b', 'vendor/fast'],
+      poolOrdered: true,
+    }),
+    loadCatalog: async () => records,
+    env: { OPENROUTER_API_KEY: 'or-key' },
+    generate: async ({ record }) => {
+      calls.push(record.record_id);
+      if (calls.length === 1) throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      return 'fallback-ok';
+    },
+  });
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls, ['direct:ollama/qwen2.5:14b', 'openrouter:vendor/fast']);
+  assert.equal(io.output().stdout, 'fallback-ok');
+  assert.equal(io.output().stderr, '');
+});
+
 test('pool skips unresolvable, ambiguous, and unroutable entries', async () => {
   const records = await fixtureRecords();
   const plan = createExecutionPlan({
@@ -305,6 +328,8 @@ test('only rate-limit and connectivity errors qualify for failover', () => {
   assert.equal(isFailoverError({ cause: { response: { status: 429 } } }), true);
   assert.equal(isFailoverError(Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT' })), true);
   assert.equal(isFailoverError(new Error('fetch failed')), true);
+  assert.equal(isFailoverError(new DOMException('operation timed out', 'TimeoutError')), true);
+  assert.equal(isFailoverError(new DOMException('operation was aborted', 'AbortError')), true);
   assert.equal(isFailoverError(Object.assign(new Error('Unauthorized'), { statusCode: 401 })), false);
   assert.equal(isFailoverError(Object.assign(new Error('Server error'), { statusCode: 500 })), false);
   assert.equal(isFailoverError(new Error('invalid model')), false);

@@ -5,6 +5,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { generateText } from 'ai';
 
 import { MiniplayerError } from './errors.js';
+import { resolveRequestTimeoutMs } from './config.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const DEFAULT_OLLAMA_HOST = 'http://localhost:11434';
@@ -159,8 +160,19 @@ export function createModel(record, config = {}, env = process.env) {
   return route.create(options)(route.modelId);
 }
 
-export async function generateOneShot({ record, config, prompt, env = process.env }) {
+export async function generateOneShot({
+  record,
+  config,
+  prompt,
+  env = process.env,
+  generateText: callGenerateText = generateText,
+}) {
+  const timeoutMs = resolveRequestTimeoutMs(config, env);
   const model = createModel(record, config, env);
-  const result = await generateText({ model, prompt });
+  const result = await callGenerateText({
+    model,
+    prompt,
+    abortSignal: AbortSignal.timeout(timeoutMs),
+  });
   return result.text;
 }
