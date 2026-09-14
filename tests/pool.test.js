@@ -307,6 +307,18 @@ test('successful built-in pool keeps keyless skips silent without debug mode', a
   assert.equal(io.output().stderr, '');
 });
 
+test('debug mode identifies the pool model being attempted', async () => {
+  const io = memoryIo();
+  const exitCode = await main(['run', 'hello'], io, {
+    loadConfig: async () => ({}),
+    loadCatalog: async () => builtInCatalogRecords(),
+    env: { MINIPLAYER_DEBUG: '1', DEEPSEEK_API_KEY: 'key' },
+    generate: async () => 'ok',
+  });
+  assert.equal(exitCode, 0);
+  assert.match(io.output().stderr, /debug: trying pool model "ollama\/qwen2\.5:14b"/);
+});
+
 test('injected environment reaches the generation call', async () => {
   const records = await fixtureRecords();
   const env = { OPENROUTER_API_KEY: 'injected-key' };

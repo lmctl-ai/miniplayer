@@ -156,6 +156,7 @@ export async function generateFromSelection({
   const failedOver = [];
   for (const candidate of plan.candidates) {
     try {
+      debug?.(`trying pool model "${candidate.selector}"`);
       return await generate({ record: candidate.record, config, prompt, env });
     } catch (error) {
       if (!isFailoverError(error)) throw error;
