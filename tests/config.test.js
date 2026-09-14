@@ -21,6 +21,10 @@ test('non-object config is an error', async () => {
   await assert.rejects(loadConfig(fixture('config-array.json')), /must contain a JSON object/);
 });
 
+test('an explicit empty config preserves built-in defaults', async () => {
+  assert.deepEqual(await loadConfig(fixture('config-empty.json')), {});
+});
+
 test('poolOrdered must be boolean when configured', async () => {
   await assert.rejects(
     loadConfig(fixture('config-ordered-invalid.json')),
