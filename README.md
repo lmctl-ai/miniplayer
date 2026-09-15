@@ -149,6 +149,16 @@ For example, `-m claude-haiku-4-5` is a catalog match, while `-m claude/claude-h
 the literal model ID `claude-haiku-4-5` only if `claude` were an approved passthrough provider—it is
 not. Unknown prefixes, unknown bare IDs, and ambiguous catalog matches are errors.
 
+If a selector matches multiple catalog records, resolution fails as ambiguous with exit code `1`
+naming the colliding `record_id`s (for example, `deepseek/deepseek-v4-flash` matches both `litellm`
+and `openrouter` catalog rows). When listed in a config `pool`, an ambiguous entry is skipped with a
+stderr warning rather than halting immediately, silently degrading failover coverage. Because
+catalog lookup only matches `gateway_id`, `vendor_model_id`, `source_model_id`, and `canonical_slug`
+(the `record_id` prefix like `litellm:...` is not a supported selector), disambiguate by targeting a
+more specific catalog identifier—such as the OpenRouter canonical slug
+`deepseek/deepseek-v4-flash-20260423`—or using a deterministic provider passthrough such as
+`deepseek/deepseek-flash`.
+
 ## Add a LiteLLM provider
 
 Install the matching AI SDK provider package, import its factory in `src/providers.js`, and add one
