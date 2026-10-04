@@ -11,6 +11,13 @@ const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const DEFAULT_OLLAMA_HOST = 'http://localhost:11434';
 const PASSTHROUGH_MODEL_ID = /^[A-Za-z0-9._:-]+$/;
 
+function usageConvention(record) {
+  if (record?.source === 'openrouter') return 'input-includes-cache';
+  if (record?.source === 'litellm' && record?.provider === 'anthropic') return 'input-excludes-cache';
+  if (record?.source === 'litellm') return 'input-includes-cache';
+  return 'unknown';
+}
+
 const LITELLM_PROVIDERS = {
   openai: {
     envKey: 'OPENAI_API_KEY',
@@ -169,6 +176,7 @@ export async function generateOneShot({
   timeoutMs,
   env = process.env,
   generateText: callGenerateText = generateText,
+  onResult,
 }) {
   const deadline = timeoutMs ?? resolveRequestTimeoutMs(config, env);
   const signals = [signal, deadline > 0 ? AbortSignal.timeout(deadline) : undefined].filter(Boolean);
@@ -186,6 +194,10 @@ export async function generateOneShot({
       model, ...(messages !== undefined ? { messages } : { prompt }),
       abortSignal: controller.signal,
     });
+    const nativeUsage = result.providerMetadata?.anthropic;
+    onResult?.({ result, record, usageConvention: usageConvention(record),
+      ...(Number.isFinite(nativeUsage?.cacheCreationInputTokens)
+        ? { cacheWriteInputTokens: nativeUsage.cacheCreationInputTokens } : {}) });
     // Explicit cancellation is never a successful result, even if a backend ignored it.
     signal?.throwIfAborted();
     return result.text;

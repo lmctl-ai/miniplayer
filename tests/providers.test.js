@@ -129,3 +129,37 @@ test('one-shot generation passes a finite AbortSignal to the AI SDK call', async
   });
   assert.equal(result, 'ok');
 });
+
+test('one-shot metadata preserves provider usage convention and Anthropic cache writes', async () => {
+  let metadata;
+  await generateOneShot({
+    record: {
+      record_id: 'litellm:anthropic/model', source: 'litellm', provider: 'anthropic',
+      vendor_model_id: 'model',
+    },
+    config: {}, env: { ANTHROPIC_API_KEY: 'test-key', MINIPLAYER_REQUEST_TIMEOUT_MS: '1000' },
+    prompt: 'hello',
+    generateText: async () => ({
+      text: 'ok', response: { id: 'anthropic-response' },
+      usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+      providerMetadata: { anthropic: { cacheCreationInputTokens: 7 } },
+    }),
+    onResult: value => { metadata = value; },
+  });
+  assert.equal(metadata.usageConvention, 'input-excludes-cache');
+  assert.equal(metadata.cacheWriteInputTokens, 7);
+});
+
+test('OpenRouter Anthropic rows use the compatible input convention', async () => {
+  let metadata;
+  await generateOneShot({
+    record: {
+      record_id: 'openrouter:anthropic/claude', source: 'openrouter', provider: 'anthropic',
+      gateway_id: 'anthropic/claude', vendor_model_id: 'claude',
+    },
+    config: {}, env: { OPENROUTER_API_KEY: 'test-key', MINIPLAYER_REQUEST_TIMEOUT_MS: '1000' },
+    prompt: 'hello', generateText: async () => ({ text: 'ok', usage: { inputTokens: 2 } }),
+    onResult: value => { metadata = value; },
+  });
+  assert.equal(metadata.usageConvention, 'input-includes-cache');
+});

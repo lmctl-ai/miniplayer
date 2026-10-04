@@ -2,8 +2,9 @@
 
 `miniplayer` is a small Node 20+ CLI for one-shot language-model calls. It selects models from the
 [`lmprice`](../lmprice) catalog, routes them to a supported provider, and exits after one response.
-The `run` and `classify` commands remain one-shot. `miniplayer acp` adds saved text
-conversations for ACP clients. Miniplayer does not invoke tools or stream individual tokens.
+The `run` and `classify` commands remain one-shot. `miniplayer acp` provides a text-only
+ACP transport for clients. Miniplayer does not invoke tools, stream individual tokens,
+resume sessions, or compact context.
 
 ## Install
 
@@ -96,27 +97,33 @@ exhaustion error names failed-over and skipped candidates.
 the built-in pool, which pins local Qwen first and DeepSeek Flash second before random fallbacks.
 Skipped configured entries still produce one stderr warning with their reasons.
 
-## ACP conversations
+## ACP turns
 
 ```sh
 miniplayer acp -m ollama/qwen2.5:14b
 ```
 
 This command speaks newline-delimited JSON-RPC on stdin/stdout. It supports
-`initialize`, `session/new`, `session/load` (with history replay),
-`session/resume` (without replay), `session/prompt`, and `session/cancel`.
+`initialize`, `session/new`, `session/prompt`, and `session/cancel`.
+Each `session/new` accepts exactly one prompt; create another session for another turn.
 It emits one `agent_message_chunk` containing the completed reply, followed by
 an `end_turn` result. Cancelled turns return `cancelled`, abort the SDK request,
-and do not append partial history. There is no implicit ACP prompt timeout;
+and do not append partial session data. There is no implicit ACP prompt timeout;
 `requestTimeoutMs` continues to apply to the existing one-shot commands only.
 
-Conversations live in `$MINIPLAYER_HOME/sessions/<uuid>.json`, defaulting to
+Turn metadata lives in `$MINIPLAYER_HOME/sessions/<uuid>.json`, defaulting to
 `$XDG_DATA_HOME/miniplayer` or `~/.local/share/miniplayer`. New files are private
-and replaced atomically. They contain history, timestamps, working directory,
-and an explicit model selector when supplied; credentials/config are not saved.
-Loading requires the original working directory and never creates a replacement
-session. The current process's `-m` overrides the saved selector; otherwise a
-saved selector is reused, or the configured/default pool is used.
+and replaced atomically. They contain the working directory, creation/update
+timestamps, selected provider/model, and per-turn input/output plus native usage
+metadata when available. Credentials/config are not saved. The files are for
+session readers such as `lmctl tail`, export, and cost reporting; they are never
+replayed into a later provider request. Turns are marked `running`, `complete`,
+`aborted`, or `failed`; input and any usage observed before cancellation or failure
+remain recorded, while failed turns have no invented output. `responseId` is a
+local stable accounting identity; a provider response ID is retained separately
+as `nativeResponseId`. Usage carries `usageConvention` so readers know whether
+input includes cached tokens, and Anthropic cache writes are exposed as
+`cacheWriteInputTokens`. Missing usage fields remain absent.
 
 This is a **text-conversation subset of ACP**, not a tool-enabled coding agent.
 It accepts text and resource links (links are represented as text; they are not
@@ -131,10 +138,9 @@ A hard crash can leave a lock; the error identifies it. Verify its recorded PID
 is no longer active before removing that specific lock and resuming. Locks are
 never stolen automatically.
 
-With the updated lmctl adapter, use `provider=miniplayer` in a teamfile, then
-`lmctl seed <teamfile>` and `lmctl prompt <teamfile> <alias> "your prompt"`.
-Batch automatically reuses one ACP process. Miniplayer has no interactive
-terminal command; continue through tracked prompts.
+Select miniplayer directly by provider/model and optionally choose its session
+directory. It does not require a teamfile alias or a resumable session. Miniplayer
+has no interactive terminal command.
 
 ## Commands
 
@@ -219,7 +225,7 @@ The ACP integration test starts the real CLI and AI SDK against an ephemeral
 localhost OpenAI-compatible endpoint. It verifies repeated prompts, restart/load,
 cancellation, and process-shutdown lock cleanup without making live model calls.
 
-A successful turn with a launch `-m` override saves that selector as the session's
-future default. History is sent in full; miniplayer does not silently truncate or
-compact it. Context-limit failures remain provider errors. A failed initial seed
-may leave an empty native session, but lmctl does not bind it as a successful member.
+A successful turn records the provider response model when supplied by the SDK,
+falling back to the selected catalog model. Context-limit failures remain provider
+errors. A failed initial turn leaves an empty metadata session with no resumable
+conversation state.

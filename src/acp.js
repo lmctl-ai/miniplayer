@@ -1,6 +1,7 @@
 import { createInterface } from 'node:readline';
 import { isAbsolute, resolve } from 'node:path';
 import { statSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { generateFromSelection } from './pool.js';
 import { SessionStore, sessionHome } from './session-store.js';
 
@@ -51,7 +52,7 @@ export class AcpAgent {
       if (!Number.isInteger(params.protocolVersion) || params.protocolVersion < 1) throw invalid('protocolVersion must be a positive integer');
       this.initialized = true;
       return { protocolVersion: 1, agentInfo: { name: 'miniplayer', version: '1.0.0' },
-        agentCapabilities: { loadSession: true, promptCapabilities: {}, sessionCapabilities: { resume: {} } }, authMethods: [] };
+        agentCapabilities: { loadSession: false, promptCapabilities: {}, sessionCapabilities: {} }, authMethods: [] };
     }
     if (!this.initialized) throw new RpcError(-32000, 'initialize is required');
     if (method === 'notifications/initialized' || method === 'initialized') return;
@@ -64,15 +65,7 @@ export class AcpAgent {
       this.loaded.set(session.id, session.cwd);
       return { sessionId: session.id };
     }
-    if (method === 'session/load' || method === 'session/resume') {
-      const cwd = sessionContext(params);
-      if (this.active.has(params.sessionId)) throw new RpcError(-32000, 'session has an active prompt');
-      const session = this.store.load(params.sessionId);
-      if (session.cwd !== cwd) throw invalid('session belongs to a different working directory');
-      this.loaded.set(session.id, cwd);
-      if (method === 'session/load') for (const message of session.messages) this.update(session.id, message.role, message.content);
-      return { sessionId: session.id };
-    }
+    if (method === 'session/load' || method === 'session/resume') throw invalid('miniplayer does not support session resume; create a new session');
     if (method === 'session/prompt') return this.prompt(params);
     throw new RpcError(-32601, `Method not found: ${method}`);
   }
@@ -83,30 +76,63 @@ export class AcpAgent {
     if (this.active.has(params.sessionId)) throw new RpcError(-32000, 'session has an active prompt');
     const release = this.store.lock(params.sessionId);
     const controller = new AbortController();
+    let providerResult;
     this.active.set(params.sessionId, controller);
     try {
-      // Reload under the lease: another connection may have appended since load.
       const session = this.store.load(params.sessionId);
       if (session.cwd !== cwd) throw invalid('session working directory changed');
       const config = await this.runtime.loadConfig(undefined, this.runtime.env);
       const records = await this.runtime.loadCatalog();
       controller.signal.throwIfAborted();
-      const messages = [...session.messages.map(({ role, content }) => ({ role, content })), { role: 'user', content: text }];
-      const selector = this.model ?? session.model;
+      if (session.turns.length > 0) throw invalid('miniplayer sessions are single-turn; create a new session');
+      const selector = this.model ?? session.requestedModel;
+      const startedAt = new Date().toISOString();
+      const startedTurn = { responseId: randomUUID(), startedAt, status: 'running', input: { text } };
+      this.store.save({ ...session, updatedAt: startedAt, turns: [...session.turns, startedTurn] });
       const reply = await generateFromSelection({
-        explicitSelector: selector, config, records, messages, signal: controller.signal, timeoutMs: 0,
+        explicitSelector: selector, config, records, prompt: text, signal: controller.signal, timeoutMs: 0,
         env: this.runtime.env, random: this.runtime.random, generate: this.runtime.generate,
         debug: this.runtime.debug, warn: this.runtime.warn,
+        onResult: value => { providerResult = value; },
       });
       controller.signal.throwIfAborted();
       if (typeof reply !== 'string') throw new Error('Provider did not return text');
-      const now = new Date().toISOString();
-      // Commit and publish synchronously: cancel cannot interleave halfway through.
-      this.store.save({ ...session, ...(selector ? { model: selector } : {}), updatedAt: now,
-        messages: [...session.messages, { role: 'user', content: text, timestamp: now }, { role: 'assistant', content: reply, timestamp: now }] });
+      const completedAt = new Date().toISOString();
+      const record = providerResult?.record;
+      const result = providerResult?.result;
+      const selectedModel = record?.vendor_model_id ?? record?.gateway_id ?? record?.source_model_id ?? selector;
+      const model = result?.response?.modelId ?? selectedModel;
+      const usage = result?.usage ?? null;
+      const nativeResponseId = result?.response?.id ?? result?.response?.requestId;
+      const turn = { ...startedTurn, completedAt, status: 'complete', output: { text: reply },
+        ...(nativeResponseId ? { nativeResponseId: String(nativeResponseId) } : {}),
+        ...(record?.provider ? { provider: record.provider } : {}), ...(model ? { model } : {}), ...(usage ? { usage } : {}),
+        ...(providerResult?.usageConvention ? { usageConvention: providerResult.usageConvention } : {}),
+        ...(providerResult?.cacheWriteInputTokens !== undefined ? { cacheWriteInputTokens: providerResult.cacheWriteInputTokens } : {}) };
+      // Persist metadata only. The next prompt always starts a fresh provider request.
+      this.store.save({ ...session, ...(record?.provider ? { provider: record.provider } : {}), ...(model ? { model } : {}),
+        updatedAt: completedAt, turns: [...session.turns, turn] });
       this.update(session.id, 'assistant', reply);
       return { stopReason: 'end_turn' };
     } catch (error) {
+      const endedAt = new Date().toISOString();
+      const current = this.store.load(params.sessionId);
+      const turn = current.turns.at(-1);
+      if (turn?.status === 'running') {
+        const result = providerResult?.result;
+        const record = providerResult?.record;
+        const nativeResponseId = result?.response?.id ?? result?.response?.requestId;
+        const usage = result?.usage ?? undefined;
+        const selectedModel = record?.vendor_model_id ?? record?.gateway_id ?? record?.source_model_id;
+        this.store.save({ ...current, ...(record?.provider ? { provider: record.provider } : {}),
+          ...((result?.response?.modelId ?? selectedModel) ? { model: result?.response?.modelId ?? selectedModel } : {}), updatedAt: endedAt,
+          turns: [...current.turns.slice(0, -1), { ...turn, endedAt,
+            status: controller.signal.aborted ? 'aborted' : 'failed',
+            ...(nativeResponseId ? { nativeResponseId: String(nativeResponseId) } : {}),
+            ...(record?.provider ? { provider: record.provider } : {}), ...((result?.response?.modelId ?? selectedModel) ? { model: result?.response?.modelId ?? selectedModel } : {}),
+            ...(usage ? { usage } : {}), ...(providerResult?.usageConvention ? { usageConvention: providerResult.usageConvention } : {}),
+            ...(providerResult?.cacheWriteInputTokens !== undefined ? { cacheWriteInputTokens: providerResult.cacheWriteInputTokens } : {}) }] });
+      }
       if (controller.signal.aborted) return { stopReason: 'cancelled' };
       throw error;
     } finally {
@@ -120,7 +146,9 @@ export class AcpAgent {
 export async function serveAcp(args, io, runtime) {
   let model;
   for (let i = 0; i < args.length; i++) {
-    if (!['-m', '--model'].includes(args[i]) || !args[i + 1] || args[i + 1].startsWith('-')) throw new Error('Usage: miniplayer acp [-m <selector>]');
+    if (!['-m', '--model'].includes(args[i]) || !args[i + 1] || args[i + 1].startsWith('-')) {
+      throw new Error('Usage: miniplayer acp [-m|--model <selector>]');
+    }
     model = args[++i];
   }
   const send = message => io.stdout.write(JSON.stringify(message) + '\n');

@@ -141,12 +141,14 @@ export async function generateFromSelection({
   generate = generateOneShot,
   debug,
   warn,
+  onResult,
 }) {
   signal?.throwIfAborted();
   const input = { config, prompt, env,
     ...(messages !== undefined ? { messages } : {}),
     ...(signal !== undefined ? { signal } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(onResult !== undefined ? { onResult } : {}),
   };
   const plan = createExecutionPlan({ explicitSelector, config, records, env, random });
 

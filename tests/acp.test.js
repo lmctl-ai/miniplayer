@@ -8,7 +8,10 @@ import { AcpAgent, serveAcp } from '../src/acp.js';
 import { SessionStore } from '../src/session-store.js';
 import { generateFromSelection } from '../src/pool.js';
 
-function setup(t, generate = async ({ messages }) => `reply:${messages.at(-1).content}`) {
+function setup(t, generate = async ({ prompt: text, onResult, record }) => {
+  onResult?.({ record, result: { response: { id: 'mock-response' }, usage: { inputTokens: 1, outputTokens: 2 } } });
+  return `reply:${text}`;
+}) {
   const cwd = mkdtempSync(join(tmpdir(), 'miniplayer-acp-'));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   const store = new SessionStore(cwd);
@@ -20,46 +23,56 @@ function setup(t, generate = async ({ messages }) => `reply:${messages.at(-1).co
 const initialize = agent => agent.handle('initialize', { protocolVersion: 1, clientCapabilities: {} });
 const prompt = (sessionId, text) => ({ sessionId, prompt: [{ type: 'text', text }] });
 
-test('ACP creates private native sessions, preserves history and replays after restart', async t => {
-  const inputs = [];
-  const { cwd, store, agent, runtime } = setup(t, async input => { inputs.push(input); return 'ACK'; });
-  assert.equal((await initialize(agent)).agentCapabilities.loadSession, true);
+test('ACP creates one-turn private metadata sessions without replay or resume', async t => {
+  const { cwd, store, agent, runtime } = setup(t);
+  const init = await initialize(agent);
+  assert.equal(init.agentCapabilities.loadSession, false);
   const { sessionId } = await agent.handle('session/new', { cwd, mcpServers: [] });
   assert.equal(statSync(store.path(sessionId)).mode & 0o777, 0o600);
   assert.deepEqual(await agent.handle('session/prompt', prompt(sessionId, 'one')), { stopReason: 'end_turn' });
-  await agent.handle('session/prompt', prompt(sessionId, 'two'));
-  assert.deepEqual(inputs[1].messages.map(m => m.content), ['one', 'ACK', 'two']);
-  assert.equal(inputs[1].timeoutMs, 0);
-  const updates = [];
-  const restarted = new AcpAgent({ store, runtime, send: value => updates.push(value) });
-  await initialize(restarted);
-  await restarted.handle('session/load', { cwd, sessionId, mcpServers: [] });
-  assert.deepEqual(updates.map(m => m.params.update.content.text), ['one', 'ACK', 'two', 'ACK']);
-  await restarted.handle('session/prompt', prompt(sessionId, 'three'));
-  assert.equal(inputs[2].messages.length, 5);
-  assert.equal(store.load(sessionId).model, 'ollama/test');
-  assert.equal(store.load(sessionId).messages.length, 6);
+  const session = store.load(sessionId);
+  assert.equal(session.turns.length, 1);
+  assert.equal(session.turns[0].input.text, 'one');
+  assert.equal(session.turns[0].output.text, 'reply:one');
+  assert.notEqual(session.turns[0].responseId, 'mock-response');
+  assert.equal(session.turns[0].nativeResponseId, 'mock-response');
+  assert.deepEqual(session.turns[0].usage, { inputTokens: 1, outputTokens: 2 });
+  assert.equal(session.model, 'test');
+  assert.equal(session.provider, 'ollama');
+  assert.equal('messages' in session, false);
   assert.equal(readFileSync(store.path(sessionId), 'utf8').includes('apiKey'), false);
+  await assert.rejects(agent.handle('session/prompt', prompt(sessionId, 'two')), /single-turn/);
+  await assert.rejects(agent.handle('session/load', { cwd, sessionId, mcpServers: [] }), /does not support session resume/);
+  await assert.rejects(agent.handle('session/resume', { cwd, sessionId, mcpServers: [] }), /does not support session resume/);
+  const next = await (new AcpAgent({ store, runtime, send: () => {} })).handle('initialize', { protocolVersion: 1 });
+  assert.equal(next.agentCapabilities.loadSession, false);
 });
 
-test('cancel aborts generation, never commits cancelled history, then session is reusable', async t => {
+test('cancel persists the input with aborted status and available usage', async t => {
   let started;
   const ready = new Promise(resolve => { started = resolve; });
-  const { cwd, agent, store } = setup(t, async ({ messages, signal }) => {
-    if (messages.at(-1).content !== 'hang') return 'ACK';
+  const { cwd, agent, store } = setup(t, async ({ signal, onResult, record }) => {
     started();
-    return new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    return new Promise((resolve, reject) => signal.addEventListener('abort', () => {
+      onResult?.({ record, result: { response: { id: 'cancelled-response', modelId: 'test-native' }, usage: { inputTokens: 4 } } });
+      reject(signal.reason);
+    }, { once: true }));
   });
   await initialize(agent);
   const { sessionId } = await agent.handle('session/new', { cwd, mcpServers: [] });
   const pending = agent.handle('session/prompt', prompt(sessionId, 'hang'));
   await ready;
-  await assert.rejects(agent.handle('session/prompt', prompt(sessionId, 'concurrent')), /active prompt/);
   await agent.handle('session/cancel', { sessionId });
   assert.deepEqual(await pending, { stopReason: 'cancelled' });
-  assert.equal(store.load(sessionId).messages.length, 0);
-  await agent.handle('session/prompt', prompt(sessionId, 'next'));
-  assert.deepEqual(store.load(sessionId).messages.map(m => m.content), ['next', 'ACK']);
+  const turn = store.load(sessionId).turns[0];
+  assert.equal(turn.status, 'aborted');
+  assert.equal(turn.input.text, 'hang');
+  assert.equal(turn.output, undefined);
+  assert.deepEqual(turn.usage, { inputTokens: 4 });
+  assert.notEqual(turn.responseId, 'cancelled-response');
+  assert.equal(turn.nativeResponseId, 'cancelled-response');
+  assert.equal(turn.provider, 'ollama');
+  assert.equal(turn.model, 'test-native');
 });
 
 test('explicit cancellation cannot fail over to another model', async () => {
@@ -71,7 +84,7 @@ test('explicit cancellation cannot fail over to another model', async () => {
   assert.equal(attempts, 1);
 });
 
-test('ACP validates handshake, session binding, content and unsupported operations', async t => {
+test('ACP validates handshake, content, and unsupported operations', async t => {
   const { cwd, agent, store } = setup(t);
   await assert.rejects(agent.handle('session/new', { cwd, mcpServers: [] }), /initialize/);
   await initialize(agent);
@@ -79,12 +92,10 @@ test('ACP validates handshake, session binding, content and unsupported operatio
   await assert.rejects(agent.handle('session/new', { cwd: '.', mcpServers: [] }), /absolute/);
   await assert.rejects(agent.handle('session/new', { cwd, mcpServers: [{ name: 'tool' }] }), /MCP servers/);
   const { sessionId } = await agent.handle('session/new', { cwd, mcpServers: [] });
-  await assert.rejects(agent.handle('session/load', { cwd: tmpdir(), sessionId, mcpServers: [] }), /different working/);
-  await assert.rejects(agent.handle('session/load', { cwd, sessionId: '../../etc/passwd', mcpServers: [] }), /Invalid.*ID/);
   await assert.rejects(agent.handle('session/prompt', { sessionId, prompt: [{ type: 'image', data: 'bad' }] }), /text and resource_link/);
   await assert.rejects(agent.handle('session/set_mode', { sessionId, modeId: 'yolo' }), /Method not found/);
   await agent.handle('session/prompt', { sessionId, prompt: [{ type: 'resource_link', uri: 'file:///not-read', name: 'reference' }] });
-  assert.match(store.load(sessionId).messages[0].content, /file:\/\/\/not-read/);
+  assert.match(store.load(sessionId).turns[0].input.text, /file:\/\/\/not-read/);
 });
 
 test('store lock refuses another writer and releases idempotently', t => {
@@ -96,12 +107,23 @@ test('store lock refuses another writer and releases idempotently', t => {
   store.lock(session.id)();
 });
 
-test('provider error preserves history and original message', async t => {
-  const { cwd, agent, store } = setup(t, async () => { throw new Error('original upstream authentication failure'); });
+test('provider error preserves the input with failed status and no invented output', async t => {
+  const { cwd, agent, store } = setup(t, async ({ onResult, record }) => {
+    onResult?.({ record, result: { response: { id: 'failed-response' }, usage: { inputTokens: 6 } } });
+    throw new Error('original upstream authentication failure');
+  });
   await initialize(agent);
   const { sessionId } = await agent.handle('session/new', { cwd, mcpServers: [] });
   await assert.rejects(agent.handle('session/prompt', prompt(sessionId, 'hi')), /original upstream authentication failure/);
-  assert.equal(store.load(sessionId).messages.length, 0);
+  const turn = store.load(sessionId).turns[0];
+  assert.equal(turn.status, 'failed');
+  assert.equal(turn.input.text, 'hi');
+  assert.equal(turn.output, undefined);
+  assert.deepEqual(turn.usage, { inputTokens: 6 });
+  assert.notEqual(turn.responseId, 'failed-response');
+  assert.equal(turn.nativeResponseId, 'failed-response');
+  assert.equal(turn.provider, 'ollama');
+  assert.equal(turn.model, 'test');
   store.lock(sessionId)();
 });
 

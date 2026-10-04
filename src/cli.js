@@ -9,7 +9,7 @@ import { generateOneShot } from './providers.js';
 import { generateFromSelection } from './pool.js';
 
 export const HELP = `Usage:
-  miniplayer acp [-m <selector>]
+  miniplayer acp [-m|--model <selector>]
   miniplayer run -m <selector> [prompt]
   miniplayer classify -m <selector> [--file <path>]
   miniplayer models [--source openrouter|litellm] [--provider <name>] [--max-input-price <number>]
