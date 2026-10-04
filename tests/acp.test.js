@@ -309,3 +309,27 @@ test('wire request IDs may be reused after the prior request completes', async t
   assert.equal(responses[1].id, 'same');
   assert.match(responses[1].error.message, /already initialized/);
 });
+
+test('ACP scopes repeated native tool IDs per turn and preserves event timestamps', async t => {
+  const calls = [];
+  const { cwd, store, agent } = setup(t, async ({ onToolEvent, onResult, record }) => {
+    const timestamp = new Date().toISOString();
+    onToolEvent?.({ type: 'tool_call', toolName: 'read_file', toolCallId: 'same', timestamp, input: { path: 'x' } });
+    onToolEvent?.({ type: 'tool_result', toolName: 'read_file', toolCallId: 'same', timestamp, result: { content: 'x' } });
+    const responseId = `response-${calls.length + 1}`; calls.push(responseId);
+    const result = { response: { id: responseId, modelId: 'test' }, usage: { inputTokens: 1, outputTokens: 1 }, steps: [{ usage: { inputTokens: 1, outputTokens: 1 }, response: { id: responseId, modelId: 'test' }, toolCalls: [{ toolCallId: 'same', toolName: 'read_file' }] }] };
+    onResult?.({ record, result, usageConvention: 'unknown' });
+    return 'done';
+  });
+  await initialize(agent);
+  const { sessionId } = await agent.handle('session/new', { cwd, mcpServers: [] });
+  await agent.handle('session/prompt', prompt(sessionId, 'one'));
+  const first = store.load(sessionId).turns[0];
+  const firstId = first.toolEvents[0].toolCallId;
+  const firstTimestamp = first.toolEvents[0].timestamp;
+  await agent.handle('session/prompt', prompt(sessionId, 'two'));
+  const turns = store.load(sessionId).turns;
+  assert.notEqual(firstId, turns[1].toolEvents[0].toolCallId);
+  assert.equal(firstTimestamp, turns[0].toolEvents[0].timestamp);
+  assert.equal(turns[0].modelResponses[0].usageConvention, 'unknown');
+});

@@ -16,6 +16,7 @@ export const HELP = `Usage:
   miniplayer models [--source openrouter|litellm] [--provider <name>] [--max-input-price <number>]
   miniplayer --help
 
+run/acp provide list_directory, read_file, write_file, shell, and webget; all are granted.
 Prompts and classification input default to stdin. Without -m, a configured or built-in pool is used.
 `;
 
@@ -147,6 +148,7 @@ async function runCommand(args, io, runtime) {
     generate: runtime.generate,
     debug: runtime.debug,
     warn: runtime.warn,
+    cwd: process.cwd(),
   });
   io.stdout.write(text);
   return 0;

@@ -2,11 +2,12 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { generateText } from 'ai';
+import { generateText, stepCountIs } from 'ai';
 
 import { MiniplayerError } from './errors.js';
 import { resolveRequestTimeoutMs } from './config.js';
 import { generateMock, isMockRecord } from './mock.js';
+import { createTools } from './tools.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const DEFAULT_OLLAMA_HOST = 'http://localhost:11434';
@@ -175,6 +176,9 @@ export async function generateOneShot({
   messages,
   signal,
   timeoutMs,
+  cwd,
+  tools,
+  onToolEvent,
   env = process.env,
   generateText: callGenerateText = generateText,
   onResult,
@@ -192,12 +196,25 @@ export async function generateOneShot({
   try {
     controller.signal.throwIfAborted();
     const model = createModel(record, config, env);
+    const toolSet = tools ?? (cwd ? createTools({ cwd, env, signal: controller.signal, onToolEvent }) : undefined);
     const result = await callGenerateText({
       model, ...(messages !== undefined ? { messages } : { prompt }),
       abortSignal: controller.signal,
+      ...(toolSet ? { tools: toolSet, stopWhen: stepCountIs(32), maxRetries: 0,
+        onStepFinish: step => onToolEvent?.({ type: 'step_finish', step, record,
+          usageConvention: usageConvention(record),
+          ...(Number.isFinite(step?.providerMetadata?.anthropic?.cacheCreationInputTokens)
+            ? { cacheWriteInputTokens: step.providerMetadata.anthropic.cacheCreationInputTokens } : {}) }) } : {}),
     });
+    if (toolSet) {
+      const lastStep = result.steps?.at(-1);
+      if (lastStep?.toolCalls?.length) {
+        throw new MiniplayerError('Tool-call step limit reached before the model produced a final answer');
+      }
+    }
     const nativeUsage = result.providerMetadata?.anthropic;
     onResult?.({ result, record, usageConvention: usageConvention(record),
+      ...(Array.isArray(result.response?.messages) ? { messages: result.response.messages } : {}),
       ...(Number.isFinite(nativeUsage?.cacheCreationInputTokens)
         ? { cacheWriteInputTokens: nativeUsage.cacheCreationInputTokens } : {}) });
     // Explicit cancellation is never a successful result, even if a backend ignored it.

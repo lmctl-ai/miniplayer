@@ -142,13 +142,22 @@ export async function generateFromSelection({
   debug,
   warn,
   onResult,
+  cwd,
+  onToolEvent,
 }) {
   signal?.throwIfAborted();
+  let toolStarted = false;
+  const observeTool = event => {
+    if (event?.type === 'started' || event?.type === 'tool_call' || event?.type === 'tool_result' || event?.phase === 'started' || event?.tool) toolStarted = true;
+    onToolEvent?.(event);
+  };
   const input = { config, prompt, env,
     ...(messages !== undefined ? { messages } : {}),
     ...(signal !== undefined ? { signal } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(onResult !== undefined ? { onResult } : {}),
+    ...(cwd !== undefined ? { cwd } : {}),
+    ...(onToolEvent !== undefined || cwd !== undefined ? { onToolEvent: observeTool } : {}),
   };
   const plan = createExecutionPlan({ explicitSelector, config, records, env, random });
 
@@ -172,7 +181,7 @@ export async function generateFromSelection({
       return await generate({ ...input, record: candidate.record });
     } catch (error) {
       signal?.throwIfAborted();
-      if (!isFailoverError(error)) throw error;
+      if (toolStarted || !isFailoverError(error)) throw error;
       failedOver.push(candidate);
       debug?.(`pool model "${candidate.selector}" hit a failover error; trying next model`);
     }
