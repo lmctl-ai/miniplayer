@@ -5,7 +5,11 @@ import { once } from 'node:events';
 import { main } from '../src/index.js';
 
 process.stdout.on('error', (error) => {
-  if (error.code === 'EPIPE') process.exit(0);
+  if (error.code === 'EPIPE') {
+    if (process.argv[2] === 'acp') process.emit('SIGTERM');
+    else process.exit(0);
+    return;
+  }
   throw error;
 });
 

@@ -1,3 +1,4 @@
+import { serveAcp } from './acp.js';
 import { readFile } from 'node:fs/promises';
 
 import { loadCatalog, listChatModels, modelListId } from './catalog.js';
@@ -8,6 +9,7 @@ import { generateOneShot } from './providers.js';
 import { generateFromSelection } from './pool.js';
 
 export const HELP = `Usage:
+  miniplayer acp [-m <selector>]
   miniplayer run -m <selector> [prompt]
   miniplayer classify -m <selector> [--file <path>]
   miniplayer models [--source openrouter|litellm] [--provider <name>] [--max-input-price <number>]
@@ -202,6 +204,7 @@ export async function execute(args, io, dependencies = {}) {
     warn: (message) => io.stderr.write(`warning: ${message}\n`),
   };
   const [command, ...commandArgs] = args;
+  if (command === 'acp') return serveAcp(commandArgs, io, runtime);
   if (command === 'run') return runCommand(commandArgs, io, runtime);
   if (command === 'models') return modelsCommand(commandArgs, io, runtime);
   if (command === 'classify') return classifyCommand(commandArgs, io, runtime);

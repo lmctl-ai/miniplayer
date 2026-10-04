@@ -133,16 +133,25 @@ export async function generateFromSelection({
   config = {},
   records,
   prompt,
+  messages,
+  signal,
+  timeoutMs,
   env = process.env,
   random = Math.random,
   generate = generateOneShot,
   debug,
   warn,
 }) {
+  signal?.throwIfAborted();
+  const input = { config, prompt, env,
+    ...(messages !== undefined ? { messages } : {}),
+    ...(signal !== undefined ? { signal } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+  };
   const plan = createExecutionPlan({ explicitSelector, config, records, env, random });
 
   if (!plan.pool) {
-    return generate({ record: plan.candidates[0].record, config, prompt, env });
+    return generate({ ...input, record: plan.candidates[0].record });
   }
 
   if (plan.source === 'config-pool' && plan.skipped.length > 0) {
@@ -156,9 +165,11 @@ export async function generateFromSelection({
   const failedOver = [];
   for (const candidate of plan.candidates) {
     try {
+      signal?.throwIfAborted();
       debug?.(`trying pool model "${candidate.selector}"`);
-      return await generate({ record: candidate.record, config, prompt, env });
+      return await generate({ ...input, record: candidate.record });
     } catch (error) {
+      signal?.throwIfAborted();
       if (!isFailoverError(error)) throw error;
       failedOver.push(candidate);
       debug?.(`pool model "${candidate.selector}" hit a failover error; trying next model`);

@@ -164,15 +164,30 @@ export async function generateOneShot({
   record,
   config,
   prompt,
+  messages,
+  signal,
+  timeoutMs,
   env = process.env,
   generateText: callGenerateText = generateText,
 }) {
-  const timeoutMs = resolveRequestTimeoutMs(config, env);
-  const model = createModel(record, config, env);
-  const result = await callGenerateText({
-    model,
-    prompt,
-    abortSignal: AbortSignal.timeout(timeoutMs),
+  const deadline = timeoutMs ?? resolveRequestTimeoutMs(config, env);
+  const signals = [signal, deadline > 0 ? AbortSignal.timeout(deadline) : undefined].filter(Boolean);
+  const controller = new AbortController();
+  const listeners = signals.map(source => {
+    const abort = () => controller.abort(source.reason);
+    if (source.aborted) abort();
+    else source.addEventListener('abort', abort, { once: true });
+    return () => source.removeEventListener('abort', abort);
   });
-  return result.text;
+  try {
+    controller.signal.throwIfAborted();
+    const model = createModel(record, config, env);
+    const result = await callGenerateText({
+      model, ...(messages !== undefined ? { messages } : { prompt }),
+      abortSignal: controller.signal,
+    });
+    // Explicit cancellation is never a successful result, even if a backend ignored it.
+    signal?.throwIfAborted();
+    return result.text;
+  } finally { for (const remove of listeners) remove(); }
 }

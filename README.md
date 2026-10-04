@@ -2,7 +2,8 @@
 
 `miniplayer` is a small Node 20+ CLI for one-shot language-model calls. It selects models from the
 [`lmprice`](../lmprice) catalog, routes them to a supported provider, and exits after one response.
-It does not stream, invoke tools, or retain sessions.
+The `run` and `classify` commands remain one-shot. `miniplayer acp` adds saved text
+conversations for ACP clients. Miniplayer does not invoke tools or stream individual tokens.
 
 ## Install
 
@@ -95,6 +96,46 @@ exhaustion error names failed-over and skipped candidates.
 the built-in pool, which pins local Qwen first and DeepSeek Flash second before random fallbacks.
 Skipped configured entries still produce one stderr warning with their reasons.
 
+## ACP conversations
+
+```sh
+miniplayer acp -m ollama/qwen2.5:14b
+```
+
+This command speaks newline-delimited JSON-RPC on stdin/stdout. It supports
+`initialize`, `session/new`, `session/load` (with history replay),
+`session/resume` (without replay), `session/prompt`, and `session/cancel`.
+It emits one `agent_message_chunk` containing the completed reply, followed by
+an `end_turn` result. Cancelled turns return `cancelled`, abort the SDK request,
+and do not append partial history. There is no implicit ACP prompt timeout;
+`requestTimeoutMs` continues to apply to the existing one-shot commands only.
+
+Conversations live in `$MINIPLAYER_HOME/sessions/<uuid>.json`, defaulting to
+`$XDG_DATA_HOME/miniplayer` or `~/.local/share/miniplayer`. New files are private
+and replaced atomically. They contain history, timestamps, working directory,
+and an explicit model selector when supplied; credentials/config are not saved.
+Loading requires the original working directory and never creates a replacement
+session. The current process's `-m` overrides the saved selector; otherwise a
+saved selector is reused, or the configured/default pool is used.
+
+This is a **text-conversation subset of ACP**, not a tool-enabled coding agent.
+It accepts text and resource links (links are represented as text; they are not
+fetched). It rejects images, audio, embedded resources, and nonempty `mcpServers`;
+configure clients with `mcpServers: []`. It never requests client filesystem or
+terminal operations and has no permission mode or interactive TUI. ACP protocol
+version 1 is advertised; unsupported methods return a JSON-RPC error.
+
+Only one writer may prompt a session at a time, even across ACP processes.
+Normal cancellation, EOF, and SIGTERM/SIGINT release the session's `.json.lock`.
+A hard crash can leave a lock; the error identifies it. Verify its recorded PID
+is no longer active before removing that specific lock and resuming. Locks are
+never stolen automatically.
+
+With the updated lmctl adapter, use `provider=miniplayer` in a teamfile, then
+`lmctl seed <teamfile>` and `lmctl prompt <teamfile> <alias> "your prompt"`.
+Batch automatically reuses one ACP process. Miniplayer has no interactive
+terminal command; continue through tracked prompts.
+
 ## Commands
 
 Run a one-shot prompt from an argument or stdin:
@@ -173,3 +214,12 @@ npm test
 ```
 
 Tests use the small catalog under `tests/fixtures/`; they do not load the production catalog.
+
+The ACP integration test starts the real CLI and AI SDK against an ephemeral
+localhost OpenAI-compatible endpoint. It verifies repeated prompts, restart/load,
+cancellation, and process-shutdown lock cleanup without making live model calls.
+
+A successful turn with a launch `-m` override saves that selector as the session's
+future default. History is sent in full; miniplayer does not silently truncate or
+compact it. Context-limit failures remain provider errors. A failed initial seed
+may leave an empty native session, but lmctl does not bind it as a successful member.
