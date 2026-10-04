@@ -31,7 +31,7 @@ export class SessionStore {
       || !Array.isArray(session.turns) || session.turns.some(turn => !turn || typeof turn !== 'object'
         || typeof turn.responseId !== 'string' || (turn.nativeResponseId !== undefined && typeof turn.nativeResponseId !== 'string')
         || !['running', 'complete', 'aborted', 'failed'].includes(turn.status)
-        || (turn.usageConvention !== undefined && !['input-includes-cache', 'input-excludes-cache', 'unknown'].includes(turn.usageConvention))
+        || (turn.usageConvention !== undefined && !['input-includes-cache', 'input-excludes-cache', 'unknown', 'synthetic'].includes(turn.usageConvention))
         || (turn.cacheWriteInputTokens !== undefined && !Number.isFinite(turn.cacheWriteInputTokens))
         || typeof turn.input?.text !== 'string' || (turn.output !== undefined && typeof turn.output?.text !== 'string'))) {
       throw new Error(`Invalid miniplayer session ${id}`);

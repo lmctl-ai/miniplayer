@@ -6,6 +6,7 @@ import { buildClassificationPrompt, parseClassificationOutput } from './classifi
 import { loadConfig } from './config.js';
 import { MiniplayerError } from './errors.js';
 import { generateOneShot } from './providers.js';
+import { generateMock, isMockRecord, mockRecord } from './mock.js';
 import { generateFromSelection } from './pool.js';
 
 export const HELP = `Usage:
@@ -124,8 +125,17 @@ export function formatModelTable(records) {
 
 async function runCommand(args, io, runtime) {
   const options = parseRunArgs(args);
-  const config = await runtime.loadConfig(undefined, runtime.env);
   const prompt = requireText(options.prompt || await readStdin(io.stdin), 'Prompt');
+  const mock = mockRecord(options.model);
+  if (typeof options.model === 'string' && options.model.startsWith('mock/') && !mock) {
+    throw new MiniplayerError(`Unknown mock model "${options.model.slice('mock/'.length)}"`);
+  }
+  if (isMockRecord(mock)) {
+    const text = await generateMock({ record: mock, prompt });
+    io.stdout.write(text);
+    return 0;
+  }
+  const config = await runtime.loadConfig(undefined, runtime.env);
   const records = await runtime.loadCatalog();
   const text = await generateFromSelection({
     explicitSelector: options.model,

@@ -2,6 +2,7 @@ import { findSelectorMatches } from './catalog.js';
 import { resolveAlias } from './config.js';
 import { MiniplayerError } from './errors.js';
 import { createPassthroughRecord } from './providers.js';
+import { mockRecord } from './mock.js';
 
 export function resolveCallableModel(records, selector, aliases = {}) {
   if (typeof selector !== 'string' || selector.length === 0) {
@@ -9,6 +10,8 @@ export function resolveCallableModel(records, selector, aliases = {}) {
   }
 
   const resolvedSelector = resolveAlias(selector, aliases);
+  const mock = mockRecord(resolvedSelector);
+  if (mock) return { record: mock, selector: resolvedSelector, passthrough: true };
   const matches = findSelectorMatches(records, resolvedSelector);
   if (matches.length > 1) {
     const ids = matches.map((record) => record.record_id).join(', ');

@@ -4,6 +4,7 @@ import { statSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { generateFromSelection } from './pool.js';
 import { SessionStore, sessionHome } from './session-store.js';
+import { generateMock, isMockRecord, mockRecord } from './mock.js';
 
 class RpcError extends Error {
   constructor(code, message) { super(message); this.code = code; }
@@ -39,6 +40,7 @@ export class AcpAgent {
     this.initialized = false;
     this.loaded = new Map();
     this.active = new Map();
+    this.mockState = new Map();
   }
   update(sessionId, role, text) {
     this.send({ jsonrpc: '2.0', method: 'session/update', params: {
@@ -62,7 +64,7 @@ export class AcpAgent {
     }
     if (method === 'session/new') {
       const session = this.store.create(sessionContext(params), this.model);
-      this.loaded.set(session.id, session.cwd);
+      this.loaded.set(session.id, { cwd: session.cwd, messages: [] });
       return { sessionId: session.id };
     }
     if (method === 'session/load' || method === 'session/resume') throw invalid('miniplayer does not support session resume; create a new session');
@@ -71,8 +73,8 @@ export class AcpAgent {
   }
   async prompt(params) {
     const text = promptText(params.prompt);
-    const cwd = this.loaded.get(params.sessionId);
-    if (!cwd) throw invalid('session must be created or loaded on this connection before prompting');
+    const live = this.loaded.get(params.sessionId);
+    if (!live) throw invalid('session must be created or loaded on this connection before prompting');
     if (this.active.has(params.sessionId)) throw new RpcError(-32000, 'session has an active prompt');
     const release = this.store.lock(params.sessionId);
     const controller = new AbortController();
@@ -80,21 +82,32 @@ export class AcpAgent {
     this.active.set(params.sessionId, controller);
     try {
       const session = this.store.load(params.sessionId);
-      if (session.cwd !== cwd) throw invalid('session working directory changed');
-      const config = await this.runtime.loadConfig(undefined, this.runtime.env);
-      const records = await this.runtime.loadCatalog();
-      controller.signal.throwIfAborted();
-      if (session.turns.length > 0) throw invalid('miniplayer sessions are single-turn; create a new session');
+      if (session.cwd !== live.cwd) throw invalid('session working directory changed');
       const selector = this.model ?? session.requestedModel;
+      const mock = mockRecord(selector);
+      if (typeof selector === 'string' && selector.startsWith('mock/') && !mock) {
+        throw invalid(`Unknown mock model "${selector.slice('mock/'.length)}"`);
+      }
+      controller.signal.throwIfAborted();
+      const config = mock ? undefined : await this.runtime.loadConfig(undefined, this.runtime.env);
+      const records = mock ? undefined : await this.runtime.loadCatalog();
       const startedAt = new Date().toISOString();
       const startedTurn = { responseId: randomUUID(), startedAt, status: 'running', input: { text } };
       this.store.save({ ...session, updatedAt: startedAt, turns: [...session.turns, startedTurn] });
-      const reply = await generateFromSelection({
-        explicitSelector: selector, config, records, prompt: text, signal: controller.signal, timeoutMs: 0,
-        env: this.runtime.env, random: this.runtime.random, generate: this.runtime.generate,
-        debug: this.runtime.debug, warn: this.runtime.warn,
-        onResult: value => { providerResult = value; },
-      });
+      let reply;
+      if (isMockRecord(mock)) {
+        reply = await generateMock({ record: mock, prompt: text, signal: controller.signal,
+          state: this.mockState.get(params.sessionId) ?? 0,
+          onResult: value => { providerResult = value; } });
+      } else {
+        const messages = [...live.messages, { role: 'user', content: text }];
+        reply = await generateFromSelection({
+          explicitSelector: selector, config, records, prompt: text, messages, signal: controller.signal, timeoutMs: 0,
+          env: this.runtime.env, random: this.runtime.random, generate: this.runtime.generate,
+          debug: this.runtime.debug, warn: this.runtime.warn,
+          onResult: value => { providerResult = value; },
+        });
+      }
       controller.signal.throwIfAborted();
       if (typeof reply !== 'string') throw new Error('Provider did not return text');
       const completedAt = new Date().toISOString();
@@ -109,9 +122,12 @@ export class AcpAgent {
         ...(record?.provider ? { provider: record.provider } : {}), ...(model ? { model } : {}), ...(usage ? { usage } : {}),
         ...(providerResult?.usageConvention ? { usageConvention: providerResult.usageConvention } : {}),
         ...(providerResult?.cacheWriteInputTokens !== undefined ? { cacheWriteInputTokens: providerResult.cacheWriteInputTokens } : {}) };
-      // Persist metadata only. The next prompt always starts a fresh provider request.
-      this.store.save({ ...session, ...(record?.provider ? { provider: record.provider } : {}), ...(model ? { model } : {}),
-        updatedAt: completedAt, turns: [...session.turns, turn] });
+      // Persist metadata only. Live conversation context stays in memory and is never reloaded.
+      const latest = this.store.load(params.sessionId);
+      this.store.save({ ...latest, ...(record?.provider ? { provider: record.provider } : {}), ...(model ? { model } : {}),
+        updatedAt: completedAt, turns: [...latest.turns.slice(0, -1), turn] });
+      if (isMockRecord(mock)) this.mockState.set(params.sessionId, providerResult?.nextState ?? 0);
+      live.messages.push({ role: 'user', content: text }, { role: 'assistant', content: reply });
       this.update(session.id, 'assistant', reply);
       return { stopReason: 'end_turn' };
     } catch (error) {
@@ -159,7 +175,7 @@ export async function serveAcp(args, io, runtime) {
   const stop = () => { agent.close(); input.close(); io.stdin.pause?.(); };
   process.once('SIGTERM', stop);
   process.once('SIGINT', stop);
-  const errorResponse = (id, error) => send({ jsonrpc: '2.0', id, error: { code: Number.isInteger(error.code) ? error.code : -32000, message: error.message ?? String(error) } });
+  const errorResponse = (id, error) => send({ jsonrpc: '2.0', id, error: { code: Number.isInteger(error.code) ? error.code : -32000, message: error.message ?? String(error), ...(error.data ? { data: error.data } : {}) } });
   try {
     for await (const line of input) {
       let message;

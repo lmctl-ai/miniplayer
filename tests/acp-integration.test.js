@@ -37,7 +37,7 @@ function connect(env) {
   };
 }
 
-test('real ACP CLI records native model, usage, timestamps, and never replays history', { timeout: 15000 }, async t => {
+test('real ACP CLI records native model and sends live multi-turn history', { timeout: 15000 }, async t => {
   const home = mkdtempSync(join(tmpdir(), 'miniplayer-acp-http-'));
   const config = join(home, 'config.json'); writeFileSync(config, '{}');
   const calls = [];
@@ -59,7 +59,8 @@ test('real ACP CLI records native model, usage, timestamps, and never replays hi
   const { sessionId } = await client.request('session/new', { cwd: home, mcpServers: [] });
   await client.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'one' }] });
   assert.deepEqual(calls[0].messages.map(message => message.content), ['one']);
-  await assert.rejects(client.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'two' }] }), /single-turn/);
+  await client.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'two' }] });
+  assert.deepEqual(calls[1].messages.map(message => message.content), ['one', 'ACK', 'two']);
   const stored = JSON.parse(readFileSync(join(home, 'sessions', `${sessionId}.json`), 'utf8'));
   assert.equal(stored.provider, 'ollama');
   assert.equal(stored.model, 'test-native');

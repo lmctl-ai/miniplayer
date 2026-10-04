@@ -6,6 +6,7 @@ import { generateText } from 'ai';
 
 import { MiniplayerError } from './errors.js';
 import { resolveRequestTimeoutMs } from './config.js';
+import { generateMock, isMockRecord } from './mock.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const DEFAULT_OLLAMA_HOST = 'http://localhost:11434';
@@ -178,6 +179,7 @@ export async function generateOneShot({
   generateText: callGenerateText = generateText,
   onResult,
 }) {
+  if (isMockRecord(record)) return generateMock({ record, prompt, signal, onResult });
   const deadline = timeoutMs ?? resolveRequestTimeoutMs(config, env);
   const signals = [signal, deadline > 0 ? AbortSignal.timeout(deadline) : undefined].filter(Boolean);
   const controller = new AbortController();

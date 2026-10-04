@@ -4,7 +4,7 @@
 [`lmprice`](../lmprice) catalog, routes them to a supported provider, and exits after one response.
 The `run` and `classify` commands remain one-shot. `miniplayer acp` provides a text-only
 ACP transport for clients. Miniplayer does not invoke tools, stream individual tokens,
-resume sessions, or compact context.
+resume sessions after process exit, or compact context.
 
 ## Install
 
@@ -105,8 +105,8 @@ miniplayer acp -m ollama/qwen2.5:14b
 
 This command speaks newline-delimited JSON-RPC on stdin/stdout. It supports
 `initialize`, `session/new`, `session/prompt`, and `session/cancel`.
-Each `session/new` accepts exactly one prompt; create another session for another turn.
-It emits one `agent_message_chunk` containing the completed reply, followed by
+Each live `session/new` may receive multiple prompts; miniplayer retains the conversation in
+memory for that ACP process. It emits one `agent_message_chunk` containing the completed reply, followed by
 an `end_turn` result. Cancelled turns return `cancelled`, abort the SDK request,
 and do not append partial session data. There is no implicit ACP prompt timeout;
 `requestTimeoutMs` continues to apply to the existing one-shot commands only.
@@ -124,6 +124,11 @@ local stable accounting identity; a provider response ID is retained separately
 as `nativeResponseId`. Usage carries `usageConvention` so readers know whether
 input includes cached tokens, and Anthropic cache writes are exposed as
 `cacheWriteInputTokens`. Missing usage fields remain absent.
+
+The built-in `mock/Echo`, `mock/Adder`, `mock/RateLimit`, and `mock/ServerError` selectors are
+test-only and bypass config, catalogs, credentials, and network access. `mock/Adder` retains its
+numeric accumulator for live turns but accepts decimal notation only. Mock usage is synthetic and
+recorded as zero tokens with `usageConvention: "synthetic"`.
 
 This is a **text-conversation subset of ACP**, not a tool-enabled coding agent.
 It accepts text and resource links (links are represented as text; they are not
