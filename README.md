@@ -1,7 +1,7 @@
 # miniplayer
 
 `miniplayer` is a small Node 20+ CLI for one-shot language-model calls. It selects models from the
-[`lmprice`](../lmprice) catalog, routes them to a supported provider, and exits after one response.
+model catalog (the schema-version-1 JSON that `lmprice` produces), routes them to a supported provider, and exits after one response.
 The `run` and `classify` commands remain one-shot. `miniplayer acp` adds saved text
 conversations for ACP clients. Miniplayer does not invoke tools or stream individual tokens.
 
@@ -15,8 +15,13 @@ npm link
 miniplayer --help
 ```
 
-The default catalog is `../lmprice/dist/model_list.json`. Set
-`MINIPLAYER_LMPRICE_CATALOG=/path/to/model_list.json` to use another schema-version-1 catalog.
+## Model catalog
+
+miniplayer selects models from a catalog file: JSON with `"schema_version": 1` and a `records`
+array (see `tests/fixtures/catalog.json` for a minimal example). Point it at your catalog with
+`MINIPLAYER_LMPRICE_CATALOG=/path/to/model_list.json`. When the variable is unset it looks for
+`../lmprice/dist/model_list.json` next to this repository, the layout used by the catalog
+builder `lmprice`. Without a catalog the CLI exits with an error that names the variable.
 
 ## Configuration
 
@@ -223,3 +228,12 @@ A successful turn with a launch `-m` override saves that selector as the session
 future default. History is sent in full; miniplayer does not silently truncate or
 compact it. Context-limit failures remain provider errors. A failed initial seed
 may leave an empty native session, but lmctl does not bind it as a successful member.
+
+
+## License and third-party software
+
+MIT, copyright Lattice Systems LLC; see `LICENSE`. miniplayer depends on the Vercel AI SDK
+(`ai`, `@ai-sdk/anthropic`, `@ai-sdk/google`, `@ai-sdk/openai`, `@ai-sdk/openai-compatible`;
+Apache-2.0) and their transitive dependencies (Apache-2.0, MIT, and BSD-3-Clause/AFL-2.1). They
+are installed from npm and are not bundled or modified here. The provider mapping for
+LiteLLM-sourced model ids follows [LiteLLM](https://github.com/BerriAI/litellm)'s provider names.

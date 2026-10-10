@@ -49,3 +49,10 @@ test('resolves aliases before exact catalog lookup', async () => {
   assert.equal(result.selector, 'vendor/fast');
   assert.equal(result.record.record_id, 'openrouter:vendor/fast');
 });
+
+test('a missing catalog error says how to supply one', async () => {
+  await assert.rejects(
+    () => loadCatalog('/nonexistent/model_list.json'),
+    (error) => /Unable to read model catalog/.test(error.message) && /MINIPLAYER_LMPRICE_CATALOG/.test(error.message),
+  );
+});

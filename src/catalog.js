@@ -15,7 +15,10 @@ export async function loadCatalog(filePath = process.env.MINIPLAYER_LMPRICE_CATA
   try {
     contents = await readFile(filePath, 'utf8');
   } catch (error) {
-    throw new MiniplayerError(`Unable to read model catalog ${filePath}: ${error.message}`);
+    const hint = error?.code === 'ENOENT'
+      ? ' Set MINIPLAYER_LMPRICE_CATALOG to a schema_version 1 model catalog (see "Model catalog" in the README).'
+      : '';
+    throw new MiniplayerError(`Unable to read model catalog ${filePath}: ${error.message}.${hint}`);
   }
 
   let document;
