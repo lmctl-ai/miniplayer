@@ -194,7 +194,7 @@ export async function execute(args, io, dependencies = {}) {
   const env = dependencies.env ?? process.env;
   const runtime = {
     loadConfig: dependencies.loadConfig ?? loadConfig,
-    loadCatalog: dependencies.loadCatalog ?? loadCatalog,
+    loadCatalog: dependencies.loadCatalog ?? ((opts) => loadCatalog({ env, ...opts })),
     generate: dependencies.generate ?? generateOneShot,
     random: dependencies.random ?? Math.random,
     env,

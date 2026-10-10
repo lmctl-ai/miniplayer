@@ -17,11 +17,32 @@ miniplayer --help
 
 ## Model catalog
 
-miniplayer selects models from a catalog file: JSON with `"schema_version": 1` and a `records`
-array (see `tests/fixtures/catalog.json` for a minimal example). Point it at your catalog with
-`MINIPLAYER_LMPRICE_CATALOG=/path/to/model_list.json`. When the variable is unset it looks for
-`../lmprice/dist/model_list.json` next to this repository, the layout used by the catalog
-builder `lmprice`. Without a catalog the CLI exits with an error that names the variable.
+miniplayer selects models from a published catalog: schema-version-1 JSON containing a `records`
+array. The dataset is produced by the `lmprice` project (compiled from OpenRouter, LiteLLM, and
+Moonshot public data) and published at:
+
+```
+https://lmctl.com/dataset/model_list.json
+```
+
+Miniplayer operates **online-first with a local cache**:
+* **Cache directory**: `(XDG_CACHE_HOME or ~/.cache)/miniplayer/lmprice` containing `model_list.json`
+  and `meta.json` (`{ etag, last_checked }`). Created with per-user permissions (`0o700` directory,
+  `0o600` files).
+* **TTL**: Defaults to 6 hours. Override with `MINIPLAYER_PRICE_TTL` in seconds (`0` forces a refresh).
+  Inside the TTL with a valid cache, miniplayer performs **no network calls at all**.
+* **ETag revalidation**: Outside the TTL, miniplayer issues a fast `HEAD` request (1,000 ms timeout)
+  and compares the `ETag` client-side. If the ETag matches, only `last_checked` in `meta.json` is updated
+  without downloading the payload. If the ETag changed, miniplayer downloads the new catalog via `GET`
+  (10,000 ms timeout), validates its schema (`schema_version === 1` and `Array.isArray(records)`), and
+  promotes it to cache atomically.
+* **Offline resilience**: Any network, DNS, timeout, HTTP error, malformed JSON, or failed schema
+  validation falls back **silently** to the existing valid cache on disk. A failed download never corrupts
+  or replaces a good cache. If no valid cache exists and no network is available, miniplayer exits with
+  an error naming the URL, the cache directory, and the `MINIPLAYER_LMPRICE_CATALOG` escape hatch.
+* **Pinned local catalog**: Set `MINIPLAYER_LMPRICE_CATALOG=/path/to/model_list.json` to pin to a
+  specific local file. Pinning disables network checks and cache lookups entirely, ensuring deterministic
+  and reproducible behavior in offline and test environments.
 
 ## Configuration
 
