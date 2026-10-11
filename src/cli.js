@@ -48,6 +48,10 @@ function takeOption(args, index, name) {
 function parseRunArgs(args) {
   let model;
   let wrapUp;
+  let file;
+  let system;
+  let systemFile;
+  let compact = false;
   const prompt = [];
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -57,6 +61,17 @@ function parseRunArgs(args) {
     } else if (arg === '-m' || arg === '--model') {
       model = takeOption(args, index, arg);
       index += 1;
+    } else if (arg === '--file') {
+      file = takeOption(args, index, arg);
+      index += 1;
+    } else if (arg === '--system') {
+      system = takeOption(args, index, arg);
+      index += 1;
+    } else if (arg === '--system-file') {
+      systemFile = takeOption(args, index, arg);
+      index += 1;
+    } else if (arg === '--compact') {
+      compact = true;
     } else if (arg === '--wrapup') {
       wrapUp = true;
     } else if (arg === '--no-wrapup') {
@@ -67,7 +82,7 @@ function parseRunArgs(args) {
       prompt.push(arg);
     }
   }
-  return { model, wrapUp, prompt: prompt.join(' ') };
+  return { model, wrapUp, file, system, systemFile, compact, prompt: prompt.join(' ') };
 }
 
 function parseChatArgs(args) {
@@ -119,6 +134,8 @@ function parseModelsArgs(args) {
 function parseClassifyArgs(args) {
   let model;
   let file;
+  let system;
+  let systemFile;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === '-m' || arg === '--model') {
@@ -127,11 +144,17 @@ function parseClassifyArgs(args) {
     } else if (arg === '--file') {
       file = takeOption(args, index, arg);
       index += 1;
+    } else if (arg === '--system') {
+      system = takeOption(args, index, arg);
+      index += 1;
+    } else if (arg === '--system-file') {
+      systemFile = takeOption(args, index, arg);
+      index += 1;
     } else {
       throw new MiniplayerError(`Unknown option for classify: ${arg}`);
     }
   }
-  return { model, file };
+  return { model, file, system, systemFile };
 }
 
 async function readStdin(stream) {
@@ -167,14 +190,35 @@ export function formatModelTable(records) {
 
 async function runCommand(args, io, runtime, preloadedPrompt) {
   const options = parseRunArgs(args);
-  const prompt = requireText(options.prompt || preloadedPrompt || await readStdin(io.stdin), 'Prompt');
+  let rawPrompt;
+  if (options.file) {
+    try {
+      rawPrompt = await readFile(options.file, 'utf8');
+    } catch (err) {
+      throw new MiniplayerError(`Unable to read prompt file ${options.file}: ${err.message}`);
+    }
+  } else {
+    rawPrompt = options.prompt || preloadedPrompt || await readStdin(io.stdin);
+  }
+  const prompt = requireText(rawPrompt, 'Prompt');
   const mock = mockRecord(options.model);
   if (typeof options.model === 'string' && options.model.startsWith('mock/') && !mock) {
     throw new MiniplayerError(`Unknown mock model "${options.model.slice('mock/'.length)}"`);
   }
 
   const config = isMockRecord(mock) ? {} : (await runtime.loadConfig(undefined, runtime.env) ?? {});
-  const shouldWrapUp = options.wrapUp !== undefined ? options.wrapUp : (config.wrapUp === true);
+  const shouldWrapUp = options.wrapUp === true;
+
+  let systemPrompt;
+  if (options.system) {
+    systemPrompt = options.system;
+  } else if (options.systemFile) {
+    try {
+      systemPrompt = await readFile(options.systemFile, 'utf8');
+    } catch (err) {
+      throw new MiniplayerError(`Unable to read system prompt file ${options.systemFile}: ${err.message}`);
+    }
+  }
 
   if (isMockRecord(mock)) {
     const text = await generateMock({ record: mock, prompt });
@@ -191,13 +235,6 @@ async function runCommand(args, io, runtime, preloadedPrompt) {
   }
 
   const records = await runtime.loadCatalog();
-  const systemPrompt = await buildInitialSystemPrompt({
-    cwd: process.cwd(),
-    toolsConfig: config?.tools,
-    env: runtime.env,
-    stderr: io.stderr,
-    warn: runtime.warn,
-  });
 
   const text = await generateFromSelection({
     explicitSelector: options.model,
@@ -205,17 +242,13 @@ async function runCommand(args, io, runtime, preloadedPrompt) {
     records,
     prompt,
     system: systemPrompt,
+    tools: {}, // pure run: NO tools
     env: runtime.env,
     random: runtime.random,
     generate: runtime.generate,
     debug: runtime.debug,
     warn: runtime.warn,
     cwd: process.cwd(),
-    onToolEvent: (event) => {
-      if (event?.type === 'tool_call') {
-        io.stderr.write(formatToolTrace(event));
-      }
-    },
   });
   io.stdout.write(text);
 
@@ -232,17 +265,13 @@ async function runCommand(args, io, runtime, preloadedPrompt) {
           { role: 'user', content: WRAP_UP_PROMPT },
         ],
         system: systemPrompt,
+        tools: {},
         cwd: process.cwd(),
         env: runtime.env,
         random: runtime.random,
         generate: runtime.generate,
         debug: runtime.debug,
         warn: runtime.warn,
-        onToolEvent: (event) => {
-          if (event?.type === 'tool_call') {
-            io.stderr.write(formatToolTrace(event));
-          }
-        },
       });
       if (wrapUpReply) {
         io.stdout.write(wrapUpReply.endsWith('\n') ? wrapUpReply : `${wrapUpReply}\n`);
@@ -515,12 +544,25 @@ async function classifyCommand(args, io, runtime) {
   }
   requireText(responseText, 'Classification input');
 
+  let systemPrompt;
+  if (options.system) {
+    systemPrompt = options.system;
+  } else if (options.systemFile) {
+    try {
+      systemPrompt = await readFile(options.systemFile, 'utf8');
+    } catch (err) {
+      throw new MiniplayerError(`Unable to read system prompt file ${options.systemFile}: ${err.message}`);
+    }
+  }
+
   const records = await runtime.loadCatalog();
   const output = await generateFromSelection({
     explicitSelector: options.model,
     config,
     records,
     prompt: buildClassificationPrompt(responseText),
+    system: systemPrompt,
+    tools: {}, // pure classify: NO tools
     env: runtime.env,
     random: runtime.random,
     generate: runtime.generate,
