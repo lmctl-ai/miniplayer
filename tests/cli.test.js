@@ -72,6 +72,35 @@ test('-- terminates run options so prompts may start with a dash', async () => {
   assert.equal(io.output().stdout, '--literal prompt');
 });
 
+test('one-shot mock selectors bypass config, catalog, and injected generation', async () => {
+  for (const model of ['Echo', 'Adder']) {
+    const io = memoryIo('');
+    const exitCode = await main(['run', '-m', `mock/${model}`, model === 'Adder' ? '7' : 'hello'], io, {
+      loadConfig: async () => { throw new Error('config must not be read'); },
+      loadCatalog: async () => { throw new Error('catalog must not be read'); },
+      generate: async () => { throw new Error('injected generator must not be called'); },
+    });
+    assert.equal(exitCode, 0);
+    assert.equal(io.output().stdout, model === 'Adder' ? '7' : 'hello');
+  }
+  for (const model of ['RateLimit', 'ServerError']) {
+    const io = memoryIo('prompt');
+    const exitCode = await main(['run', '-m', `mock/${model}`, 'prompt'], io, {
+      loadConfig: async () => { throw new Error('config must not be read'); },
+      loadCatalog: async () => { throw new Error('catalog must not be read'); },
+      generate: async () => { throw new Error('injected generator must not be called'); },
+    });
+    assert.equal(exitCode, 1);
+    assert.match(io.output().stderr, /mock (rate limit exceeded|temporary server error)/);
+  }
+  const unknown = memoryIo('prompt');
+  assert.equal(await main(['run', '-m', 'mock/Unknown', 'prompt'], unknown, {
+    loadConfig: async () => { throw new Error('config must not be read'); },
+    loadCatalog: async () => { throw new Error('catalog must not be read'); },
+  }), 1);
+  assert.match(unknown.output().stderr, /Unknown mock model/);
+});
+
 test('injected MINIPLAYER_CONFIG wins over the ambient process environment', async () => {
   const io = memoryIo();
   const records = await loadCatalog(catalogPath);

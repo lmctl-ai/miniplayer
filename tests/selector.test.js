@@ -55,6 +55,13 @@ test('unrouted provider prefixes and unknown bare ids retain catalog errors', as
   );
 });
 
+test('recognizes only the supported mock model names', () => {
+  assert.equal(resolveCallableModel([], 'mock/Echo').record.provider, 'mock');
+  assert.equal(resolveCallableModel([], 'mock/Adder').record.vendor_model_id, 'Adder');
+  assert.throws(() => resolveCallableModel([], 'mock/Unknown'), /No model matches selector/);
+  assert.throws(() => resolveCallableModel([], 'mock/echo'), /No model matches selector/);
+});
+
 for (const selector of [
   'deepseek/',
   'deepseek//x',

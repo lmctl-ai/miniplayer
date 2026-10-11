@@ -18,7 +18,8 @@ export class SessionStore {
   create(cwd, model) {
     mkdirSync(this.directory, { recursive: true, mode: 0o700 });
     const now = new Date().toISOString();
-    const session = { version: 1, id: randomUUID(), cwd, ...(model ? { model } : {}), createdAt: now, updatedAt: now, messages: [] };
+    const session = { version: 2, id: randomUUID(), cwd, ...(model ? { requestedModel: model } : {}),
+      createdAt: now, updatedAt: now, turns: [] };
     writeFileSync(this.path(session.id), JSON.stringify(session), { flag: 'wx', mode: 0o600 });
     return session;
   }
@@ -26,8 +27,13 @@ export class SessionStore {
     const path = this.path(id);
     if (!existsSync(path)) throw new Error(`Miniplayer session ${id} does not exist`);
     const session = JSON.parse(readFileSync(path, 'utf8'));
-    if (session.version !== 1 || session.id !== id || typeof session.cwd !== 'string'
-      || !Array.isArray(session.messages) || session.messages.some(m => !['user', 'assistant'].includes(m.role) || typeof m.content !== 'string')) {
+    if (session.version !== 2 || session.id !== id || typeof session.cwd !== 'string'
+      || !Array.isArray(session.turns) || session.turns.some(turn => !turn || typeof turn !== 'object'
+        || typeof turn.responseId !== 'string' || (turn.nativeResponseId !== undefined && typeof turn.nativeResponseId !== 'string')
+        || !['running', 'complete', 'aborted', 'failed'].includes(turn.status)
+        || (turn.usageConvention !== undefined && !['input-includes-cache', 'input-excludes-cache', 'unknown', 'synthetic'].includes(turn.usageConvention))
+        || (turn.cacheWriteInputTokens !== undefined && !Number.isFinite(turn.cacheWriteInputTokens))
+        || typeof turn.input?.text !== 'string' || (turn.output !== undefined && typeof turn.output?.text !== 'string'))) {
       throw new Error(`Invalid miniplayer session ${id}`);
     }
     return session;

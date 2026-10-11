@@ -2,8 +2,10 @@
 
 `miniplayer` is a small Node 20+ CLI for one-shot language-model calls. It selects models from the
 model catalog (the schema-version-1 JSON that `lmprice` produces), routes them to a supported provider, and exits after one response.
-The `run` and `classify` commands remain one-shot. `miniplayer acp` adds saved text
-conversations for ACP clients. Miniplayer does not invoke tools or stream individual tokens.
+The `run` command handles one user request, including any model/tool steps needed
+to answer it. `classify` stays tool-free. `miniplayer acp` supports live multi-turn
+conversations with native tools. Miniplayer does not stream individual tokens,
+resume sessions after process exit, or compact context.
 
 ## Install
 
@@ -61,7 +63,7 @@ limits. A minimal file-based DeepSeek credential config is:
 ```
 
 Set `MINIPLAYER_CONFIG=/path/to/config.json` to use an alternate config path.
-Every provider call has a 60,000 ms total timeout. Set positive-integer config `requestTimeoutMs` or
+Standalone `run`/`classify` calls retain their configured 60,000 ms default model timeout. ACP turns have no implicit deadline. Set positive-integer config `requestTimeoutMs` or
 environment `MINIPLAYER_REQUEST_TIMEOUT_MS` to override it; the environment value wins. Invalid,
 zero, negative, or excessively large values are configuration errors.
 
@@ -122,45 +124,93 @@ exhaustion error names failed-over and skipped candidates.
 the built-in pool, which pins local Qwen first and DeepSeek Flash second before random fallbacks.
 Skipped configured entries still produce one stderr warning with their reasons.
 
-## ACP conversations
+## ACP turns
 
 ```sh
 miniplayer acp -m ollama/qwen2.5:14b
 ```
 
 This command speaks newline-delimited JSON-RPC on stdin/stdout. It supports
-`initialize`, `session/new`, `session/load` (with history replay),
-`session/resume` (without replay), `session/prompt`, and `session/cancel`.
-It emits one `agent_message_chunk` containing the completed reply, followed by
+`initialize`, `session/new`, `session/prompt`, and `session/cancel`.
+Each live `session/new` may receive multiple prompts; miniplayer retains the conversation in
+memory for that ACP process. It emits one `agent_message_chunk` containing the completed reply, followed by
 an `end_turn` result. Cancelled turns return `cancelled`, abort the SDK request,
-and do not append partial history. There is no implicit ACP prompt timeout;
+and retain known tool/model observations with partial status. There is no implicit ACP prompt timeout;
 `requestTimeoutMs` continues to apply to the existing one-shot commands only.
 
-Conversations live in `$MINIPLAYER_HOME/sessions/<uuid>.json`, defaulting to
+Turn metadata lives in `$MINIPLAYER_HOME/sessions/<uuid>.json`, defaulting to
 `$XDG_DATA_HOME/miniplayer` or `~/.local/share/miniplayer`. New files are private
-and replaced atomically. They contain history, timestamps, working directory,
-and an explicit model selector when supplied; credentials/config are not saved.
-Loading requires the original working directory and never creates a replacement
-session. The current process's `-m` overrides the saved selector; otherwise a
-saved selector is reused, or the configured/default pool is used.
+and replaced atomically. They contain the working directory, creation/update
+timestamps, selected provider/model, and per-turn input/output plus native usage
+metadata when available. Credentials/config are not saved. The files are for
+session readers such as `lmctl tail`, export, and cost reporting; they are never
+replayed into a later provider request. Turns are marked `running`, `complete`,
+`aborted`, or `failed`; input and any usage observed before cancellation or failure
+remain recorded, while failed turns have no invented output. `responseId` is a
+local stable accounting identity; a provider response ID is retained separately
+as `nativeResponseId`. Usage carries `usageConvention` so readers know whether
+input includes cached tokens, and Anthropic cache writes are exposed as
+`cacheWriteInputTokens`. Missing usage fields remain absent.
 
-This is a **text-conversation subset of ACP**, not a tool-enabled coding agent.
+The built-in `mock/Echo`, `mock/Adder`, `mock/RateLimit`, and `mock/ServerError` selectors are
+test-only and bypass config, catalogs, credentials, and network access. `mock/Adder` retains its
+numeric accumulator for live turns but accepts decimal notation only. Mock usage is synthetic and
+recorded as zero tokens with `usageConvention: "synthetic"`.
+
+ACP accepts text prompts and executes the same five native tools as `run`.
 It accepts text and resource links (links are represented as text; they are not
 fetched). It rejects images, audio, embedded resources, and nonempty `mcpServers`;
-configure clients with `mcpServers: []`. It never requests client filesystem or
-terminal operations and has no permission mode or interactive TUI. ACP protocol
+configure clients with `mcpServers: []`. It executes tools locally without requesting client filesystem or
+terminal operations. All tools are granted; there is no permission mode or
+interactive TUI. ACP protocol
 version 1 is advertised; unsupported methods return a JSON-RPC error.
 
 Only one writer may prompt a session at a time, even across ACP processes.
 Normal cancellation, EOF, and SIGTERM/SIGINT release the session's `.json.lock`.
 A hard crash can leave a lock; the error identifies it. Verify its recorded PID
-is no longer active before removing that specific lock and resuming. Locks are
+is no longer active before removing that specific lock. Cold resume remains unsupported. Locks are
 never stolen automatically.
 
-With the updated lmctl adapter, use `provider=miniplayer` in a teamfile, then
-`lmctl seed <teamfile>` and `lmctl prompt <teamfile> <alias> "your prompt"`.
-Batch automatically reuses one ACP process. Miniplayer has no interactive
-terminal command; continue through tracked prompts.
+Select miniplayer directly by provider/model and optionally choose its session
+directory. It does not require a teamfile alias or a resumable session. Miniplayer
+has no interactive terminal command.
+
+## Native tools
+
+Tool-capable models receive all five tools in `run` and live ACP sessions. There
+are no permission prompts, plan mode, enable/disable flags, or workspace sandbox.
+Relative paths resolve against the session working directory; absolute paths are
+accepted. Explicit mock models remain deterministic and never execute tools.
+
+| Tool | Arguments and bounds |
+| --- | --- |
+| `list_directory` | `path`, optional entry `offset` and `limit`; 200 entries by default, at most 1,000 |
+| `read_file` | `path`, optional byte `offset` and `maxBytes`; 64 KiB by default, at most 256 KiB |
+| `write_file` | `path`, UTF-8 `content`; atomically creates/replaces a regular file, at most 1 MiB, preserves an existing file's mode |
+| `shell` | `command`, optional `cwd`; POSIX shell with at most 64 KiB of combined raw stdout/stderr retained |
+| `webget` | HTTP(S) `url`, optional byte `offset` and `maxBytes`; streaming GET, 64 KiB default and 256 KiB maximum returned body |
+
+Reads return `content`, `bytesRead`, `nextOffset`, `eof` and `truncated`. Offsets
+are bytes, not line numbers; a slice through a UTF-8 code point can contain a
+replacement character. Directory output includes entry names/types and paging
+metadata. Symlink write targets and non-regular file read/write targets are
+rejected. Parent directories for a new file must already exist.
+
+`webget` follows redirects and returns status, final URL and content type.
+Non-2xx bodies remain readable as bounded results. Its offsets apply to the
+response byte stream, and unused body data is cancelled at the limit. It permits
+localhost/private addresses, like other HTTP URLs. Shell output is drained even
+when truncated. Neither tool adds its own time deadline; explicit cancellation
+aborts a web request or terminates the owned shell process group, escalating
+only for cancellation when descendants ignore SIGTERM.
+
+The model/tool loop is bounded to 32 model steps. An unfinished tool loop is an
+error, even if the last step contained interim text. Once a tool starts, a later
+model error cannot trigger automatic pool failover that could repeat effects.
+ACP emits correlated tool-call progress and stores per-model-step usage plus
+bounded tool observations. Known observations survive failure/cancellation;
+unknown usage or I/O stays unknown. Live context retains complete SDK tool-call
+and tool-result messages. Observation files are never used for cold resume.
 
 ## Commands
 
@@ -245,10 +295,10 @@ The ACP integration test starts the real CLI and AI SDK against an ephemeral
 localhost OpenAI-compatible endpoint. It verifies repeated prompts, restart/load,
 cancellation, and process-shutdown lock cleanup without making live model calls.
 
-A successful turn with a launch `-m` override saves that selector as the session's
-future default. History is sent in full; miniplayer does not silently truncate or
-compact it. Context-limit failures remain provider errors. A failed initial seed
-may leave an empty native session, but lmctl does not bind it as a successful member.
+A successful turn records the provider response model when supplied by the SDK,
+falling back to the selected catalog model. Context-limit failures remain provider
+errors. A failed initial turn leaves an empty metadata session with no resumable
+conversation state.
 
 
 ## License and third-party software
