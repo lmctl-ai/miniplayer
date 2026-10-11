@@ -5,6 +5,8 @@ import { randomUUID } from 'node:crypto';
 import { generateFromSelection } from './pool.js';
 import { SessionStore, sessionHome } from './session-store.js';
 import { generateMock, isMockRecord, mockRecord } from './mock.js';
+import { buildInitialSystemPrompt } from './prompt-builder.js';
+import { compactSessionContext } from './compaction.js';
 
 class RpcError extends Error {
   constructor(code, message) { super(message); this.code = code; }
@@ -132,7 +134,7 @@ export class AcpAgent {
       if (this.initialized) throw invalid('connection is already initialized');
       if (!Number.isInteger(params.protocolVersion) || params.protocolVersion < 1) throw invalid('protocolVersion must be a positive integer');
       this.initialized = true;
-      return { protocolVersion: 1, agentInfo: { name: 'miniplayer', version: '1.0.0' },
+      return { protocolVersion: 1, agentInfo: { name: 'miniplayer', version: '2.0.0' },
         agentCapabilities: { loadSession: false, promptCapabilities: {}, sessionCapabilities: {} }, authMethods: [] };
     }
     if (!this.initialized) throw new RpcError(-32000, 'initialize is required');
@@ -142,8 +144,16 @@ export class AcpAgent {
       return;
     }
     if (method === 'session/new') {
-      const session = this.store.create(sessionContext(params), this.model);
-      this.loaded.set(session.id, { cwd: session.cwd, messages: [] });
+      const cwd = sessionContext(params);
+      const session = this.store.create(cwd, this.model);
+      const mock = mockRecord(this.model);
+      const config = mock ? {} : (await this.runtime.loadConfig?.(undefined, this.runtime.env)?.catch?.(() => ({})) ?? {});
+      const systemPrompt = await buildInitialSystemPrompt({
+        cwd: session.cwd,
+        toolsConfig: config?.tools,
+        env: this.runtime.env,
+      }).catch(() => '');
+      this.loaded.set(session.id, { cwd: session.cwd, messages: [], systemPrompt, lastUsage: null });
       return { sessionId: session.id };
     }
     if (method === 'session/load' || method === 'session/resume') throw invalid('miniplayer does not support session resume; create a new session');
@@ -177,11 +187,45 @@ export class AcpAgent {
       this.store.save({ ...session, updatedAt: startedAt, turns: [...session.turns, startedTurn] });
       let reply;
       if (isMockRecord(mock)) {
+        let candidateMessages = [...live.messages, { role: 'user', content: text }];
+        const compactResult = await compactSessionContext({
+          messages: candidateMessages,
+          record: mock,
+          config: {},
+          cwd: live.cwd,
+          env: this.runtime.env,
+          generate: generateMock,
+          signal: controller.signal,
+          warn: this.runtime.warn,
+          stderr: this.runtime.stderr ?? process.stderr,
+          lastUsage: live.lastUsage,
+        });
+        if (compactResult.compacted) {
+          candidateMessages = compactResult.messages;
+          live.messages = candidateMessages.slice(0, -1);
+        }
         reply = await generateMock({ record: mock, prompt: text, signal: controller.signal,
           state: this.mockState.get(params.sessionId) ?? 0,
           onResult: value => { providerResult = value; } });
       } else {
-        const messages = [...live.messages, { role: 'user', content: text }];
+        let candidateMessages = [...live.messages, { role: 'user', content: text }];
+        const compactResult = await compactSessionContext({
+          messages: candidateMessages,
+          record: undefined,
+          config,
+          cwd: live.cwd,
+          env: this.runtime.env,
+          generate: this.runtime.generate,
+          signal: controller.signal,
+          warn: this.runtime.warn,
+          stderr: this.runtime.stderr ?? process.stderr,
+          lastUsage: live.lastUsage,
+        });
+        if (compactResult.compacted) {
+          candidateMessages = compactResult.messages;
+          live.messages = candidateMessages.slice(0, -1);
+        }
+        const messages = candidateMessages;
         const persistProgress = () => {
           try {
             const current = this.store.load(params.sessionId);
@@ -196,7 +240,9 @@ export class AcpAgent {
           } catch { /* progress persistence must not interrupt the provider turn */ }
         };
         reply = await generateFromSelection({
-          explicitSelector: selector, config, records, prompt: text, messages, signal: controller.signal, timeoutMs: 0,
+          explicitSelector: selector, config, records, prompt: text, messages,
+          system: live.systemPrompt,
+          signal: controller.signal, timeoutMs: 0,
           env: this.runtime.env, random: this.runtime.random, generate: this.runtime.generate,
           debug: this.runtime.debug, warn: this.runtime.warn,
           cwd: live.cwd,
@@ -223,6 +269,7 @@ export class AcpAgent {
       const selectedModel = record?.vendor_model_id ?? record?.gateway_id ?? record?.source_model_id ?? selector;
       const model = result?.response?.modelId ?? selectedModel;
       const usage = aggregateUsage(result);
+      live.lastUsage = usage;
       const nativeResponseId = result?.response?.id ?? result?.response?.requestId;
       const stepContext = { turnId: startedTurn.responseId, provider: record?.provider, model, usageConvention: providerResult?.usageConvention, cacheWriteInputTokens: providerResult?.cacheWriteInputTokens };
       const turn = { ...startedTurn, completedAt, status: 'complete', output: { text: reply },

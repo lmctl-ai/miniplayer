@@ -58,9 +58,12 @@ test('real ACP CLI records native model and sends live multi-turn history', { ti
   assert.equal(init.agentCapabilities.loadSession, false);
   const { sessionId } = await client.request('session/new', { cwd: home, mcpServers: [] });
   await client.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'one' }] });
-  assert.deepEqual(calls[0].messages.map(message => message.content), ['one']);
+  assert.equal(calls[0].messages[0].role, 'system');
+  assert.ok(calls[0].messages[0].content.includes('You are running in directory:'));
+  assert.deepEqual(calls[0].messages.filter(m => m.role !== 'system').map(m => m.content), ['one']);
   await client.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'two' }] });
-  assert.deepEqual(calls[1].messages.map(message => message.content), ['one', 'ACK', 'two']);
+  assert.equal(calls[1].messages[0].role, 'system');
+  assert.deepEqual(calls[1].messages.filter(m => m.role !== 'system').map(m => m.content), ['one', 'ACK', 'two']);
   const stored = JSON.parse(readFileSync(join(home, 'sessions', `${sessionId}.json`), 'utf8'));
   assert.equal(stored.provider, 'ollama');
   assert.equal(stored.model, 'test-native');

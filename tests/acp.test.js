@@ -333,3 +333,48 @@ test('ACP scopes repeated native tool IDs per turn and preserves event timestamp
   assert.equal(firstTimestamp, turns[0].toolEvents[0].timestamp);
   assert.equal(turns[0].modelResponses[0].usageConvention, 'unknown');
 });
+
+test('ACP initialize returns protocolVersion 1 and miniplayer version 2.0.0', async t => {
+  const { agent } = setup(t);
+  const init = await initialize(agent);
+  assert.equal(init.protocolVersion, 1);
+  assert.equal(init.agentInfo.name, 'miniplayer');
+  assert.equal(init.agentInfo.version, '2.0.0');
+});
+
+test('ACP session passes initial system prompt and triggers compaction on long sessions', async t => {
+  let lastSystemPrompt;
+  const { cwd, store } = setup(t);
+  const agent = new AcpAgent({
+    store,
+    model: 'ollama/test',
+    runtime: {
+      env: { MINIPLAYER_HOME: cwd },
+      loadConfig: async () => ({ compact: { thresholdTokens: 10 } }),
+      loadCatalog: async () => [],
+      generate: async ({ system, prompt: p }) => {
+        if (system) lastSystemPrompt = system;
+        if (typeof p === 'string' && p.includes('"summary"') && p.includes('"notes"')) {
+          return JSON.stringify({ summary: 'Compacted test summary', notes: 'Durable test notes' });
+        }
+        return `reply:${p}`;
+      },
+      random: () => 0,
+    },
+    send: () => {},
+  });
+  await initialize(agent);
+  const { sessionId } = await agent.handle('session/new', { cwd, mcpServers: [] });
+  const live = agent.loaded.get(sessionId);
+  assert.ok(live.systemPrompt.includes('You are running in directory:'));
+
+  // Run turns
+  await agent.handle('session/prompt', prompt(sessionId, 'turn 1'));
+  await agent.handle('session/prompt', prompt(sessionId, 'turn 2'));
+  await agent.handle('session/prompt', prompt(sessionId, 'turn 3'));
+
+  // Compaction should have run and live.messages should be compacted
+  const messages = live.messages;
+  assert.ok(messages.some(m => typeof m.content === 'string' && m.content.startsWith('Context summary:')));
+});
+
