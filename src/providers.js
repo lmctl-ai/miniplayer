@@ -7,7 +7,7 @@ import { generateText, stepCountIs } from 'ai';
 import { MiniplayerError } from './errors.js';
 import { resolveRequestTimeoutMs } from './config.js';
 import { generateMock, isMockRecord } from './mock.js';
-import { createTools } from './tools.js';
+import { createExternalTools } from './external-tools.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const DEFAULT_OLLAMA_HOST = 'http://localhost:11434';
@@ -174,6 +174,7 @@ export async function generateOneShot({
   config,
   prompt,
   messages,
+  system,
   signal,
   timeoutMs,
   cwd,
@@ -196,17 +197,25 @@ export async function generateOneShot({
   try {
     controller.signal.throwIfAborted();
     const model = createModel(record, config, env);
-    const toolSet = tools ?? (cwd ? createTools({ cwd, env, signal: controller.signal, onToolEvent }) : undefined);
+    const toolSet = tools ?? createExternalTools({
+      toolsConfig: config?.tools,
+      cwd,
+      env,
+      signal: controller.signal,
+      onToolEvent,
+    });
+    const hasTools = Boolean(toolSet && Object.keys(toolSet).length > 0);
     const result = await callGenerateText({
       model, ...(messages !== undefined ? { messages } : { prompt }),
+      ...(system !== undefined ? { system } : {}),
       abortSignal: controller.signal,
-      ...(toolSet ? { tools: toolSet, stopWhen: stepCountIs(32), maxRetries: 0,
+      ...(hasTools ? { tools: toolSet, stopWhen: stepCountIs(32), maxRetries: 0,
         onStepFinish: step => onToolEvent?.({ type: 'step_finish', step, record,
           usageConvention: usageConvention(record),
           ...(Number.isFinite(step?.providerMetadata?.anthropic?.cacheCreationInputTokens)
             ? { cacheWriteInputTokens: step.providerMetadata.anthropic.cacheCreationInputTokens } : {}) }) } : {}),
     });
-    if (toolSet) {
+    if (hasTools) {
       const lastStep = result.steps?.at(-1);
       if (lastStep?.toolCalls?.length) {
         throw new MiniplayerError('Tool-call step limit reached before the model produced a final answer');

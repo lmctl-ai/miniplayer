@@ -134,6 +134,7 @@ export async function generateFromSelection({
   records,
   prompt,
   messages,
+  system,
   signal,
   timeoutMs,
   env = process.env,
@@ -153,6 +154,7 @@ export async function generateFromSelection({
   };
   const input = { config, prompt, env,
     ...(messages !== undefined ? { messages } : {}),
+    ...(system !== undefined ? { system } : {}),
     ...(signal !== undefined ? { signal } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(onResult !== undefined ? { onResult } : {}),

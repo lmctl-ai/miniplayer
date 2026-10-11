@@ -61,6 +61,48 @@ export async function loadConfig(filePath, env = process.env) {
   if (config.poolOrdered !== undefined && typeof config.poolOrdered !== 'boolean') {
     throw new MiniplayerError(`Config ${resolvedPath} field "poolOrdered" must be a boolean`);
   }
+  if (config.tools !== undefined) {
+    if (!Array.isArray(config.tools)) {
+      throw new MiniplayerError(`Config ${resolvedPath} field "tools" must be an array`);
+    }
+    for (const item of config.tools) {
+      if (typeof item === 'string') {
+        if (!item.trim()) throw new MiniplayerError(`Config ${resolvedPath} tools item must not be empty`);
+      } else if (item && typeof item === 'object' && !Array.isArray(item)) {
+        if (typeof item.command !== 'string' || !item.command.trim()) {
+          throw new MiniplayerError(`Config ${resolvedPath} tool item requires a non-empty "command" string`);
+        }
+        if (item.name !== undefined && (typeof item.name !== 'string' || !item.name.trim())) {
+          throw new MiniplayerError(`Config ${resolvedPath} tool item "name" must be a non-empty string`);
+        }
+        if (item.brief !== undefined && typeof item.brief !== 'string') {
+          throw new MiniplayerError(`Config ${resolvedPath} tool item "brief" must be a string`);
+        }
+      } else {
+        throw new MiniplayerError(`Config ${resolvedPath} tools items must be strings or tool objects`);
+      }
+    }
+  }
+  if (config.wrapUp !== undefined && typeof config.wrapUp !== 'boolean') {
+    throw new MiniplayerError(`Config ${resolvedPath} field "wrapUp" must be a boolean`);
+  }
+  if (config.compact !== undefined) {
+    if (!config.compact || typeof config.compact !== 'object' || Array.isArray(config.compact)) {
+      throw new MiniplayerError(`Config ${resolvedPath} field "compact" must be an object`);
+    }
+    if (config.compact.thresholdRatio !== undefined) {
+      const r = config.compact.thresholdRatio;
+      if (typeof r !== 'number' || !Number.isFinite(r) || r <= 0 || r > 1) {
+        throw new MiniplayerError(`Config ${resolvedPath} compact.thresholdRatio must be a number between 0 and 1`);
+      }
+    }
+    if (config.compact.thresholdTokens !== undefined) {
+      const t = config.compact.thresholdTokens;
+      if (!Number.isInteger(t) || t <= 0) {
+        throw new MiniplayerError(`Config ${resolvedPath} compact.thresholdTokens must be a positive integer`);
+      }
+    }
+  }
   if (config.requestTimeoutMs !== undefined) resolveRequestTimeoutMs(config, {});
 
   return config;

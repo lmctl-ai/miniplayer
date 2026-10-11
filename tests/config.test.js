@@ -51,3 +51,41 @@ test('invalid request timeout values are clean errors', async () => {
     /requestTimeoutMs.*positive integer/,
   );
 });
+
+test('tools validation enforces strings or tool objects', async () => {
+  const { writeFile, rm, mkdtemp } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'miniplayer-cfg-test-'));
+  try {
+    const validPath = join(dir, 'valid.json');
+    await writeFile(validPath, JSON.stringify({
+      tools: ['lmgit', { name: 'gh', command: 'lmgh', brief: 'GitHub CLI' }],
+      wrapUp: false,
+      compact: { thresholdRatio: 0.8, thresholdTokens: 50000 },
+    }));
+    const loaded = await loadConfig(validPath);
+    assert.equal(loaded.tools.length, 2);
+    assert.equal(loaded.wrapUp, false);
+    assert.equal(loaded.compact.thresholdRatio, 0.8);
+
+    const invalidToolsPath = join(dir, 'invalid-tools.json');
+    await writeFile(invalidToolsPath, JSON.stringify({ tools: 'not-array' }));
+    await assert.rejects(loadConfig(invalidToolsPath), /field "tools" must be an array/);
+
+    const invalidItemPath = join(dir, 'invalid-item.json');
+    await writeFile(invalidItemPath, JSON.stringify({ tools: [{ name: 'x' }] }));
+    await assert.rejects(loadConfig(invalidItemPath), /requires a non-empty "command" string/);
+
+    const invalidWrapUpPath = join(dir, 'invalid-wrapup.json');
+    await writeFile(invalidWrapUpPath, JSON.stringify({ wrapUp: 'yes' }));
+    await assert.rejects(loadConfig(invalidWrapUpPath), /field "wrapUp" must be a boolean/);
+
+    const invalidCompactPath = join(dir, 'invalid-compact.json');
+    await writeFile(invalidCompactPath, JSON.stringify({ compact: { thresholdRatio: 1.5 } }));
+    await assert.rejects(loadConfig(invalidCompactPath), /compact\.thresholdRatio must be a number between 0 and 1/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
