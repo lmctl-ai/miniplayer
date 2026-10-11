@@ -1,7 +1,7 @@
 import { MiniplayerError } from './errors.js';
 import { randomUUID } from 'node:crypto';
 
-const MODELS = new Set(['Echo', 'RateLimit', 'ServerError', 'Adder']);
+const MODELS = new Set(['Echo', 'RateLimit', 'ServerError', 'Adder', 'Compactor']);
 
 export function mockRecord(selector) {
   if (typeof selector !== 'string' || !selector.startsWith('mock/')) return null;
@@ -51,8 +51,15 @@ export async function generateMock({ record, prompt, signal, state = 0, onResult
   const responseId = `mock-${randomUUID()}`;
   let text;
   let nextState = state;
-  if (model === 'Echo') text = prompt;
-  else {
+  if (model === 'Compactor') {
+    text = JSON.stringify({ summary: 'Mock compacted summary', notes: 'Mock durable notes' });
+  } else if (model === 'Echo') {
+    if (typeof prompt === 'string' && prompt.includes('"summary"') && prompt.includes('"notes"')) {
+      text = JSON.stringify({ summary: 'Echo compacted summary', notes: 'Echo durable notes' });
+    } else {
+      text = prompt;
+    }
+  } else {
     const value = numericPrompt(prompt);
     nextState = state + value;
     if (!Number.isFinite(nextState)) throw new MiniplayerError('Adder result is not finite');
