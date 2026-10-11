@@ -183,6 +183,7 @@ export async function generateOneShot({
   env = process.env,
   generateText: callGenerateText = generateText,
   onResult,
+  warn,
 }) {
   if (isMockRecord(record)) return generateMock({ record, prompt, signal, onResult });
   const deadline = timeoutMs ?? resolveRequestTimeoutMs(config, env);
@@ -205,6 +206,12 @@ export async function generateOneShot({
       onToolEvent,
     });
     const hasTools = Boolean(toolSet && Object.keys(toolSet).length > 0);
+    if (hasTools && record?.capabilities?.supports_function_calling === false) {
+      const modelName = record.vendor_model_id || record.source_model_id || record.record_id;
+      const msg = `model "${modelName}" does not support tool calling in catalog metadata; configured tools may fail`;
+      if (warn) warn(msg);
+      else try { process.stderr.write(`warning: ${msg}\n`); } catch {}
+    }
     const result = await callGenerateText({
       model, ...(messages !== undefined ? { messages } : { prompt }),
       ...(system !== undefined ? { system } : {}),

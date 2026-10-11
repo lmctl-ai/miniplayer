@@ -161,11 +161,26 @@ export async function generateFromSelection({
     ...(onResult !== undefined ? { onResult } : {}),
     ...(cwd !== undefined ? { cwd } : {}),
     ...(tools !== undefined ? { tools } : {}),
+    ...(warn !== undefined ? { warn } : {}),
     ...(onToolEvent !== undefined || cwd !== undefined ? { onToolEvent: observeTool } : {}),
   };
   const plan = createExecutionPlan({ explicitSelector, config, records, env, random });
 
+  const willUseTools = (tools !== undefined && tools && Object.keys(tools).length > 0)
+    || (tools === undefined && Array.isArray(config?.tools) && config.tools.length > 0);
+  const warnedModels = new Set();
+  const checkToolSupport = (rec) => {
+    if (willUseTools && rec?.capabilities?.supports_function_calling === false) {
+      const name = rec.vendor_model_id || rec.source_model_id || rec.record_id;
+      if (!warnedModels.has(name)) {
+        warnedModels.add(name);
+        warn?.(`model "${name}" does not support tool calling in catalog metadata; configured tools may fail`);
+      }
+    }
+  };
+
   if (!plan.pool) {
+    checkToolSupport(plan.candidates[0].record);
     return generate({ ...input, record: plan.candidates[0].record });
   }
 
@@ -182,6 +197,7 @@ export async function generateFromSelection({
     try {
       signal?.throwIfAborted();
       debug?.(`trying pool model "${candidate.selector}"`);
+      checkToolSupport(candidate.record);
       return await generate({ ...input, record: candidate.record });
     } catch (error) {
       signal?.throwIfAborted();
