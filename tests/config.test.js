@@ -84,8 +84,21 @@ test('tools validation enforces strings or tool objects', async () => {
     const invalidCompactPath = join(dir, 'invalid-compact.json');
     await writeFile(invalidCompactPath, JSON.stringify({ compact: { thresholdRatio: 1.5 } }));
     await assert.rejects(loadConfig(invalidCompactPath), /compact\.thresholdRatio must be a number between 0 and 1/);
+
+    const duplicateToolsPath = join(dir, 'duplicate-tools.json');
+    await writeFile(duplicateToolsPath, JSON.stringify({ tools: ['/opt/a/lmgit', '/opt/b/lmgit'] }));
+    await assert.rejects(loadConfig(duplicateToolsPath), /duplicate tool name "lmgit"/);
+
+    const reservedToolPath = join(dir, 'reserved-tool.json');
+    await writeFile(reservedToolPath, JSON.stringify({ tools: [{ name: '__proto__', command: 'git' }] }));
+    await assert.rejects(loadConfig(reservedToolPath), /reserved property name/);
+
+    const longToolPath = join(dir, 'long-tool.json');
+    await writeFile(longToolPath, JSON.stringify({ tools: [{ name: 'a'.repeat(65), command: 'git' }] }));
+    await assert.rejects(loadConfig(longToolPath), /exceeds 64 characters/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
 

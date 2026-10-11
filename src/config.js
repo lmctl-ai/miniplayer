@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { MiniplayerError } from './errors.js';
 import { validatePool } from './selection.js';
+import { parseToolConfigItem } from './external-tools.js';
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 const MAX_REQUEST_TIMEOUT_MS = 2_147_483_647;
@@ -65,6 +66,11 @@ export async function loadConfig(filePath, env = process.env) {
     if (!Array.isArray(config.tools)) {
       throw new MiniplayerError(`Config ${resolvedPath} field "tools" must be an array`);
     }
+    const seenNames = new Set();
+    const FORBIDDEN_TOOL_NAMES = new Set([
+      '__proto__', 'constructor', 'prototype', 'toString', 'valueOf',
+      'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable', 'toLocaleString'
+    ]);
     for (const item of config.tools) {
       if (typeof item === 'string') {
         if (!item.trim()) throw new MiniplayerError(`Config ${resolvedPath} tools item must not be empty`);
@@ -81,6 +87,18 @@ export async function loadConfig(filePath, env = process.env) {
       } else {
         throw new MiniplayerError(`Config ${resolvedPath} tools items must be strings or tool objects`);
       }
+
+      const parsed = parseToolConfigItem(item);
+      if (parsed.name.length > 64) {
+        throw new MiniplayerError(`Config ${resolvedPath} tool name "${parsed.name}" exceeds 64 characters`);
+      }
+      if (FORBIDDEN_TOOL_NAMES.has(parsed.name)) {
+        throw new MiniplayerError(`Config ${resolvedPath} tool name "${parsed.name}" is a reserved property name`);
+      }
+      if (seenNames.has(parsed.name)) {
+        throw new MiniplayerError(`Config ${resolvedPath} duplicate tool name "${parsed.name}"`);
+      }
+      seenNames.add(parsed.name);
     }
   }
   if (config.wrapUp !== undefined && typeof config.wrapUp !== 'boolean') {

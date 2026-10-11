@@ -146,8 +146,15 @@ export class AcpAgent {
     if (method === 'session/new') {
       const cwd = sessionContext(params);
       const session = this.store.create(cwd, this.model);
-      const mock = mockRecord(this.model);
-      const config = mock ? {} : (await this.runtime.loadConfig?.(undefined, this.runtime.env)?.catch?.(() => ({})) ?? {});
+      const isMock = typeof this.model === 'string' && this.model.startsWith('mock/');
+      let config = {};
+      if (!isMock) {
+        try {
+          config = (await this.runtime.loadConfig(undefined, this.runtime.env)) ?? {};
+        } catch (err) {
+          throw invalid(err.message);
+        }
+      }
       const systemPrompt = await buildInitialSystemPrompt({
         cwd: session.cwd,
         toolsConfig: config?.tools,

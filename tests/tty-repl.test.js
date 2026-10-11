@@ -31,13 +31,18 @@ test('real TTY Ctrl-C exits 0 when idle and cancels turn when running', { timeou
   }
 
   // 1. Idle Ctrl-C exits 0
+  const idleDir = mkdtempSync(join(tmpdir(), 'miniplayer-tty-idle-'));
+  t.after(() => rmSync(idleDir, { recursive: true, force: true }));
+  const idleConfig = join(idleDir, 'config.json');
+  writeFileSync(idleConfig, '{}');
+
   const idleCode = await new Promise((resolve, reject) => {
     const py = spawn('python3', ['-c', `
 import pty, os, sys, time, subprocess
-node_bin, cli_bin = sys.argv[1], sys.argv[2]
+node_bin, cli_bin, cfg = sys.argv[1:4]
 master, slave = pty.openpty()
 env = dict(os.environ)
-env['MINIPLAYER_CONFIG'] = '/dev/null'
+env['MINIPLAYER_CONFIG'] = cfg
 proc = subprocess.Popen([node_bin, cli_bin, 'chat', '-m', 'mock/Echo', '--no-wrapup'],
                         stdin=slave, stdout=slave, stderr=slave, close_fds=True, env=env)
 os.close(slave)
@@ -45,7 +50,7 @@ time.sleep(0.5)
 os.write(master, b'\\x03')
 proc.wait(timeout=5)
 sys.exit(proc.returncode)
-`, process.execPath, bin]);
+`, process.execPath, bin, idleConfig]);
 
     py.on('error', reject);
     py.on('exit', resolve);

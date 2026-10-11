@@ -173,7 +173,7 @@ async function runCommand(args, io, runtime, preloadedPrompt) {
     throw new MiniplayerError(`Unknown mock model "${options.model.slice('mock/'.length)}"`);
   }
 
-  const config = mock ? {} : (await runtime.loadConfig?.(undefined, runtime.env)?.catch?.(() => ({})) ?? {});
+  const config = isMockRecord(mock) ? {} : (await runtime.loadConfig(undefined, runtime.env) ?? {});
   const shouldWrapUp = options.wrapUp !== undefined ? options.wrapUp : (config.wrapUp === true);
 
   if (isMockRecord(mock)) {
@@ -260,7 +260,12 @@ async function chatCommand(args, io, runtime) {
     throw new MiniplayerError(`Unknown mock model "${options.model.slice('mock/'.length)}"`);
   }
 
-  const config = await runtime.loadConfig?.(undefined, runtime.env)?.catch?.(() => ({})) ?? {};
+  let config = {};
+  try {
+    config = (await runtime.loadConfig(undefined, runtime.env)) ?? {};
+  } catch (err) {
+    if (!isMockRecord(mock)) throw err;
+  }
   const records = mock ? [] : (await runtime.loadCatalog?.()?.catch?.(() => []) ?? []);
   const systemPrompt = await buildInitialSystemPrompt({
     cwd: process.cwd(),

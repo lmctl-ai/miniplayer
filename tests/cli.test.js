@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { loadCatalog } from '../src/catalog.js';
+import { MiniplayerError } from '../src/errors.js';
 import { main } from '../src/index.js';
 
 const catalogPath = fileURLToPath(new URL('./fixtures/catalog.json', import.meta.url));
@@ -147,3 +148,16 @@ test('ambient MINIPLAYER_CONFIG does not leak when injected env omits it', async
     else process.env.MINIPLAYER_CONFIG = previous;
   }
 });
+
+test('invalid config in run command fails with exit 1 and prints error', async () => {
+  const io = memoryIo();
+  const exitCode = await main(['run', 'hello'], io, {
+    loadConfig: async () => {
+      throw new MiniplayerError('Config bad.json field "tools" must be an array');
+    },
+    loadCatalog: async () => [],
+  });
+  assert.equal(exitCode, 1);
+  assert.ok(io.output().stderr.includes('Config bad.json field "tools" must be an array'));
+});
+

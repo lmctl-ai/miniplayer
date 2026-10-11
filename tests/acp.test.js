@@ -49,6 +49,19 @@ test('ACP creates private metadata sessions with live context but no cold resume
   assert.equal(next.agentCapabilities.loadSession, false);
 });
 
+test('invalid config causes session/new to throw error naming file and field', async t => {
+  const { cwd, store, runtime } = setup(t);
+  runtime.loadConfig = async () => {
+    throw new Error('Config /path/to/bad.json field "tools" must be an array');
+  };
+  const agent = new AcpAgent({ store, runtime, model: 'ollama/test', send: () => {} });
+  await initialize(agent);
+  await assert.rejects(
+    agent.handle('session/new', { cwd, mcpServers: [] }),
+    /Config \/path\/to\/bad\.json field "tools" must be an array/
+  );
+});
+
 test('cancel persists the input with aborted status and available usage', async t => {
   let started;
   const ready = new Promise(resolve => { started = resolve; });

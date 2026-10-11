@@ -49,9 +49,9 @@ test('parseToolConfigItem handles strings and objects', () => {
 });
 
 test('createExternalTools returns empty object when no tools configured', () => {
-  assert.deepEqual(createExternalTools(), {});
-  assert.deepEqual(createExternalTools({ toolsConfig: [] }), {});
-  assert.deepEqual(createExternalTools({ toolsConfig: null }), {});
+  assert.deepEqual(createExternalTools(), Object.create(null));
+  assert.deepEqual(createExternalTools({ toolsConfig: [] }), Object.create(null));
+  assert.deepEqual(createExternalTools({ toolsConfig: null }), Object.create(null));
 });
 
 test('external tool executes successfully and captures argv exactness without shell expansion', async () => {

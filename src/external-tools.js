@@ -261,10 +261,10 @@ export function createExternalTools({
   onToolEvent,
 } = {}) {
   if (!Array.isArray(toolsConfig) || toolsConfig.length === 0) {
-    return {};
+    return Object.create(null);
   }
 
-  const tools = {};
+  const tools = Object.create(null);
   for (const item of toolsConfig) {
     const spec = parseToolConfigItem(item);
     if (!spec.command) continue;
