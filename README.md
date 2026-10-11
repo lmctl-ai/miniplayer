@@ -61,8 +61,8 @@ miniplayer chat -m ollama/qwen2.5:14b
   - `/exit`: Ends the session cleanly and runs a final wrap-up turn (unless disabled).
   - `/help`: Displays available slash commands and keybindings.
   - `/compact`: Triggers manual context compaction.
-- **Turn cancellation**: Pressing `Ctrl-C` while a model turn or tool is running cancels that turn and returns to the prompt. Pressing `Ctrl-C` on an empty line exits the REPL.
-- **Wrap-up**: On exit (`/exit` or EOF), miniplayer runs a final turn prompting the model to summarize critical session state into durable memory notes if necessary. Disable wrap-up via the `--no-wrapup` CLI flag or by setting `"wrapUp": false` in configuration.
+- **Turn cancellation & interrupt**: On an interactive TTY, pressing `Ctrl-C` while a model turn or tool is running cancels that turn and returns immediately to the prompt. Pressing `Ctrl-C` while idle at the prompt closes the session cleanly (running a final wrap-up turn unless disabled) and exits with status 0.
+- **Wrap-up**: On exit (`/exit`, EOF, or idle `Ctrl-C`), miniplayer runs a final turn prompting the model to summarize critical session state into durable memory notes if necessary. Disable wrap-up via the `--no-wrapup` CLI flag or by setting `"wrapUp": false` in configuration.
 - **Non-TTY fallback**: Running `miniplayer` without arguments when stdin is piped (non-TTY) automatically routes to `run` mode reading the prompt from stdin.
 
 ### 2. One-shot prompt (`miniplayer run`)
@@ -104,11 +104,12 @@ ACP sessions initialize with dynamic system prompts (cwd preamble, tool outlines
 `AGENTS.md`, and `durable-memory/index.md`), execute configured external tools, and run context compaction
 when conversations approach model token limits.
 
-## External tools & permission model
+## External tools
 
 Miniplayer has **no built-in tools**. Tools are supplied exclusively through configuration in
-`~/.config/miniplayer/config.json` (or `$MINIPLAYER_CONFIG`). If no tools are configured, miniplayer
-operates with zero tools.
+`~/.config/miniplayer/config.json` (or `$MINIPLAYER_CONFIG`). Permissions and execution policies live
+within each standalone tool executable; miniplayer discovers tool outlines via parallel `--list` calls
+and invokes tools directly as child processes. If no tools are configured, miniplayer operates with zero tools.
 
 ### Configuration
 
@@ -121,8 +122,7 @@ Tools are declared in the `tools` array as command strings or objects:
     {
       "name": "lmgit",
       "command": "/usr/local/bin/lmgit",
-      "brief": "Git operations tool",
-      "description": "Full schema-driven git operations"
+      "brief": "Git operations tool"
     }
   ]
 }
@@ -133,9 +133,19 @@ Tool names are normalized to `[a-zA-Z0-9_-]`.
 ### Security and execution model
 
 1. **Direct child process execution**: Tools are spawned directly using `child_process.spawn(command, args, { shell: false })`. No shell is invoked, preventing shell interpolation and command injection vulnerabilities.
-2. **Process group isolation and clean cancellation**: Each tool is launched in a detached process group. Aborting or cancelling a turn sends `SIGTERM` to the process group (`-pid`), escalating to `SIGKILL` after 500 ms if the process does not terminate.
+2. **Process group isolation and clean cancellation**: Each tool is launched in a detached process group. Aborting or cancelling a turn sends `SIGTERM` to the process group (`-pid`), escalating to `SIGKILL` after 250 ms if the process does not terminate.
 3. **Bounded I/O**: Standard output is capped at 256 KiB and standard error at 64 KiB. If limits are exceeded, remaining output is drained and discarded, and the tool result includes `truncated: true`.
 4. **Resilient error handling**: Missing binaries (`ENOENT`) or spawn failures return structured tool error responses back to the model rather than crashing miniplayer.
+
+## Levels and roles
+
+Miniplayer is designed as a focused assistant and interpreter rather than a monolithic autonomous coder:
+
+1. **Level 1 — No tools (Default)**: Classifier, summarizer, direct interpreter, or conversational assistant. Safe for unprivileged execution and rapid routing.
+2. **Level 2 — Read-only inspection (`lmtools`, `lmprobe`)**: Inspector, code reviewer, and test failure analyzer. Can examine filesystem state, schemas, and probe diagnostic endpoints without mutation side-effects.
+3. **Level 3 — Extended toolsets (`lmgit`, `lmgh`, `lmaws`, etc.)**: Coder's assistant, ticket updater, and operational helper.
+
+Miniplayer is an interactive helper and reasoning component, not a standalone build-and-test runner. Heavy or risky workflows (such as repository-wide builds, deployments, or deterministic scripting) are driven by orchestrators like `lmscript`, which run deterministic recipes and pass outputs to miniplayer for interpretation and guidance.
 
 ## Context compaction & no-resume policy
 
@@ -186,7 +196,7 @@ Example configuration:
 - `requestTimeoutMs`: Request timeout in milliseconds for one-shot commands (default 60,000 ms).
 - `wrapUp`: Boolean controlling whether REPL exit runs a durable-memory wrap-up turn (default `true`).
 - `compact`: Object with `thresholdRatio` (float, default 0.7) and/or `thresholdTokens` (integer) to control when context compaction triggers.
-- `tools`: Array of tool command strings or `{ name, command, brief, description }` objects.
+- `tools`: Array of tool command strings or `{ name, command, brief }` objects.
 - `provider`: Map of provider credentials and settings (e.g., `apiKey`, `baseURL`).
 
 ### Provider credentials and environment variables
@@ -253,7 +263,7 @@ Run the hermetic test suite:
 npm test
 ```
 
-Unit tests use fixtures in `tests/fixtures/` and do not make network calls or execute external tools.
+Unit tests use fixtures such as `tests/fixtures/faketool.js` to simulate external tools, and do not make network calls.
 
 ## License
 

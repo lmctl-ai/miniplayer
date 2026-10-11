@@ -38,7 +38,7 @@ test('real TTY Ctrl-C exits 0 when idle and cancels turn when running', { timeou
 
   const idleCode = await new Promise((resolve, reject) => {
     const py = spawn('python3', ['-c', `
-import pty, os, sys, time, subprocess
+import pty, os, sys, time, subprocess, select
 node_bin, cli_bin, cfg = sys.argv[1:4]
 master, slave = pty.openpty()
 env = dict(os.environ)
@@ -46,10 +46,25 @@ env['MINIPLAYER_CONFIG'] = cfg
 proc = subprocess.Popen([node_bin, cli_bin, 'chat', '-m', 'mock/Echo', '--no-wrapup'],
                         stdin=slave, stdout=slave, stderr=slave, close_fds=True, env=env)
 os.close(slave)
-time.sleep(0.5)
+
+# Wait for REPL prompt '> '
+out = b''
+start = time.time()
+while time.time() - start < 5:
+    r, _, _ = select.select([master], [], [], 0.05)
+    if r:
+        out += os.read(master, 1024)
+        if b'> ' in out:
+            break
+
+# Send Ctrl-C while idle
 os.write(master, b'\\x03')
-proc.wait(timeout=5)
-sys.exit(proc.returncode)
+try:
+    proc.wait(timeout=5)
+    sys.exit(proc.returncode)
+except subprocess.TimeoutExpired:
+    proc.kill()
+    sys.exit(124)
 `, process.execPath, bin, idleConfig]);
 
     py.on('error', reject);
@@ -60,12 +75,14 @@ sys.exit(proc.returncode)
   // 2. In-flight Ctrl-C cancels turn, stays in REPL, then /exit exits 0
   const workDir = mkdtempSync(join(tmpdir(), 'miniplayer-tty-ctrlc-'));
   const config = join(workDir, 'config.json');
+  const turnStartedFile = join(workDir, 'turn-started');
   writeFileSync(config, '{}');
 
   let serverRequestReceived = false;
   let serverCancelled = false;
   const server = createServer(async (req, res) => {
     serverRequestReceived = true;
+    try { writeFileSync(turnStartedFile, 'started'); } catch {}
     req.on('close', () => {
       serverCancelled = true;
     });
@@ -99,7 +116,7 @@ sys.exit(proc.returncode)
     const py = spawn('python3', ['-c', `
 import pty, os, sys, time, subprocess, select
 
-node_bin, cli_bin, port, cfg, cat = sys.argv[1:6]
+node_bin, cli_bin, port, cfg, cat, start_file = sys.argv[1:7]
 master, slave = pty.openpty()
 env = dict(os.environ)
 env['MINIPLAYER_CONFIG'] = cfg
@@ -111,31 +128,47 @@ proc = subprocess.Popen([node_bin, cli_bin, 'chat', '-m', 'ollama/qwen2.5:14b', 
 os.close(slave)
 
 output = b''
-time.sleep(0.5)
+# Wait for initial prompt '> '
+start = time.time()
+while time.time() - start < 5:
+    r, _, _ = select.select([master], [], [], 0.05)
+    if r:
+        output += os.read(master, 1024)
+        if b'> ' in output:
+            break
 
 # Send turn prompt
 os.write(master, b'hello slow turn\\n')
 
-# Wait for turn to start, then send Ctrl-C (\\x03)
-time.sleep(0.8)
+# Wait for server to receive request
+wait_start = time.time()
+while time.time() - wait_start < 5:
+    if os.path.exists(start_file):
+        break
+    time.sleep(0.05)
+
+# Send Ctrl-C to cancel active turn
 os.write(master, b'\\x03')
 
 # Read output until prompt returns
 start_time = time.time()
-while time.time() - start_time < 3:
-    r, _, _ = select.select([master], [], [], 0.2)
+while time.time() - start_time < 5:
+    r, _, _ = select.select([master], [], [], 0.05)
     if r:
         chunk = os.read(master, 1024)
         output += chunk
-        if b'turn cancelled' in output or b'> ' in output[2:]:
+        if b'turn cancelled' in output and output.count(b'> ') >= 2:
             break
 
 # Send /exit to quit cleanly
 os.write(master, b'/exit\\n')
-proc.wait(timeout=5)
+try:
+    proc.wait(timeout=5)
+except subprocess.TimeoutExpired:
+    proc.kill()
 sys.stdout.buffer.write(output)
 sys.exit(proc.returncode)
-`, process.execPath, bin, String(port), config, catalog]);
+`, process.execPath, bin, String(port), config, catalog, turnStartedFile]);
 
     let pyOut = '';
     py.stdout.on('data', d => { pyOut += d.toString('utf8'); });

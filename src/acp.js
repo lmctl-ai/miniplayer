@@ -114,7 +114,7 @@ export class AcpAgent {
   toolUpdate(sessionId, event) {
     const id = event?.toolCallId ?? event?.id;
     const name = event?.toolName ?? event?.name ?? event?.tool ?? 'tool';
-    const kind = { list_directory: 'search', read_file: 'read', write_file: 'edit', shell: 'execute', webget: 'fetch' }[name] ?? 'execute';
+    const kind = event?.kind ?? 'execute';
     const input = event?.input ?? event?.args;
     const finished = event?.type === 'tool_result' || event?.phase === 'finished' || event?.status === 'completed' || event?.status === 'failed'
       || (event?.tool && (event.result !== undefined || event.error !== undefined));

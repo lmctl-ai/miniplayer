@@ -325,7 +325,7 @@ test('wire request IDs may be reused after the prior request completes', async t
 
 test('ACP scopes repeated native tool IDs per turn and preserves event timestamps', async t => {
   const calls = [];
-  const { cwd, store, agent } = setup(t, async ({ onToolEvent, onResult, record }) => {
+  const { cwd, store, agent, updates } = setup(t, async ({ onToolEvent, onResult, record }) => {
     const timestamp = new Date().toISOString();
     onToolEvent?.({ type: 'tool_call', toolName: 'read_file', toolCallId: 'same', timestamp, input: { path: 'x' } });
     onToolEvent?.({ type: 'tool_result', toolName: 'read_file', toolCallId: 'same', timestamp, result: { content: 'x' } });
@@ -345,6 +345,8 @@ test('ACP scopes repeated native tool IDs per turn and preserves event timestamp
   assert.notEqual(firstId, turns[1].toolEvents[0].toolCallId);
   assert.equal(firstTimestamp, turns[0].toolEvents[0].timestamp);
   assert.equal(turns[0].modelResponses[0].usageConvention, 'unknown');
+  const toolCallUpdate = updates.find(u => u.params?.update?.sessionUpdate === 'tool_call');
+  assert.equal(toolCallUpdate?.params?.update?.kind, 'execute');
 });
 
 test('ACP initialize returns protocolVersion 1 and miniplayer version 2.0.0', async t => {
