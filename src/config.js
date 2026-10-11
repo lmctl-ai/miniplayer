@@ -104,6 +104,9 @@ export async function loadConfig(filePath, env = process.env) {
   if (config.wrapUp !== undefined && typeof config.wrapUp !== 'boolean') {
     throw new MiniplayerError(`Config ${resolvedPath} field "wrapUp" must be a boolean`);
   }
+  if (config.contextFiles !== undefined && typeof config.contextFiles !== 'boolean') {
+    throw new MiniplayerError(`Config ${resolvedPath} field "contextFiles" must be a boolean`);
+  }
   if (config.compact !== undefined) {
     if (!config.compact || typeof config.compact !== 'object' || Array.isArray(config.compact)) {
       throw new MiniplayerError(`Config ${resolvedPath} field "compact" must be an object`);

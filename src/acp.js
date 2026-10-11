@@ -1,6 +1,7 @@
 import { createInterface } from 'node:readline';
 import { isAbsolute, resolve } from 'node:path';
 import { statSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { generateFromSelection } from './pool.js';
 import { SessionStore, sessionHome } from './session-store.js';
@@ -99,8 +100,8 @@ function sessionContext(params) {
 }
 
 export class AcpAgent {
-  constructor({ store, runtime, model, send }) {
-    Object.assign(this, { store, runtime, model, send });
+  constructor({ store, runtime, model, send, system, systemFile, contextFiles }) {
+    Object.assign(this, { store, runtime, model, send, system, systemFile, contextFiles });
     this.initialized = false;
     this.loaded = new Map();
     this.active = new Map();
@@ -155,13 +156,28 @@ export class AcpAgent {
           throw invalid(err.message);
         }
       }
-      const systemPrompt = await buildInitialSystemPrompt({
-        cwd: session.cwd,
-        toolsConfig: config?.tools,
-        env: this.runtime.env,
-        stderr: this.runtime.stderr ?? process.stderr,
-        warn: this.runtime.warn,
-      });
+      let systemPrompt;
+      if (this.system) {
+        systemPrompt = this.system;
+      } else if (this.systemFile) {
+        try {
+          systemPrompt = await readFile(this.systemFile, 'utf8');
+        } catch (err) {
+          throw invalid(`Unable to read system prompt file ${this.systemFile}: ${err.message}`);
+        }
+      } else {
+        const includeContextFiles = this.contextFiles !== undefined
+          ? this.contextFiles
+          : (config.contextFiles !== false);
+        systemPrompt = await buildInitialSystemPrompt({
+          cwd: session.cwd,
+          toolsConfig: config?.tools,
+          includeContextFiles,
+          env: this.runtime.env,
+          stderr: this.runtime.stderr ?? process.stderr,
+          warn: this.runtime.warn,
+        });
+      }
       this.loaded.set(session.id, { cwd: session.cwd, messages: [], systemPrompt, lastUsage: null });
       return { sessionId: session.id };
     }
@@ -352,14 +368,38 @@ export class AcpAgent {
 
 export async function serveAcp(args, io, runtime) {
   let model;
+  let system;
+  let systemFile;
+  let contextFiles;
   for (let i = 0; i < args.length; i++) {
-    if (['-m', '--model'].includes(args[i])) {
-      if (!args[i + 1] || args[i + 1].startsWith('-')) throw new Error('Usage: miniplayer acp [-m|--model <selector>]');
+    const arg = args[i];
+    if (['-m', '--model'].includes(arg)) {
+      if (!args[i + 1] || args[i + 1].startsWith('-')) throw new Error('Usage: miniplayer acp [-m|--model <selector>] [options]');
       model = args[++i];
-    } else throw new Error('Usage: miniplayer acp [-m|--model <selector>]');
+    } else if (arg === '--system') {
+      if (!args[i + 1] || args[i + 1].startsWith('-')) throw new Error('Option --system requires a value');
+      system = args[++i];
+    } else if (arg === '--system-file') {
+      if (!args[i + 1] || args[i + 1].startsWith('-')) throw new Error('Option --system-file requires a value');
+      systemFile = args[++i];
+    } else if (arg === '--context-files') {
+      contextFiles = true;
+    } else if (arg === '--no-context-files') {
+      contextFiles = false;
+    } else {
+      throw new Error(`Usage: miniplayer acp [-m|--model <selector>] [options]`);
+    }
   }
   const send = message => io.stdout.write(JSON.stringify(message) + '\n');
-  const agent = new AcpAgent({ store: new SessionStore(sessionHome(runtime.env)), runtime, model, send });
+  const agent = new AcpAgent({
+    store: new SessionStore(sessionHome(runtime.env)),
+    runtime,
+    model,
+    send,
+    system,
+    systemFile,
+    contextFiles,
+  });
   const pending = new Set();
   const ids = new Set();
   const input = createInterface({ input: io.stdin, crlfDelay: Infinity });

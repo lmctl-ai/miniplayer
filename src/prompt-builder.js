@@ -114,6 +114,7 @@ async function getToolOutline(toolSpec, cwd, env) {
 export async function buildInitialSystemPrompt({
   cwd = process.cwd(),
   toolsConfig = [],
+  includeContextFiles = true,
   env = process.env,
   stderr = process.stderr,
   warn,
@@ -145,31 +146,33 @@ export async function buildInitialSystemPrompt({
     }
   }
 
-  // (c) AGENTS.md in cwd
-  try {
-    const agentsContent = await readFileWithCap(join(effectiveCwd, 'AGENTS.md'));
-    if (agentsContent) {
-      sections.push(`## Instructions (AGENTS.md)\n\n${agentsContent}`);
+  // (c) AGENTS.md in cwd (optional context file)
+  if (includeContextFiles) {
+    try {
+      const agentsContent = await readFileWithCap(join(effectiveCwd, 'AGENTS.md'));
+      if (agentsContent) {
+        sections.push(`## Instructions (AGENTS.md)\n\n${agentsContent}`);
+      }
+    } catch (err) {
+      const warning = `warning: failed to read AGENTS.md: ${err.message}\n`;
+      if (warn) warn(warning);
+      else try { stderr?.write(warning); } catch {}
     }
-  } catch (err) {
-    const warning = `warning: failed to read AGENTS.md: ${err.message}\n`;
-    if (warn) warn(warning);
-    else try { stderr?.write(warning); } catch {}
-  }
 
-  // (d) durable-memory/index.md in cwd
-  try {
-    const memoryContent = await readFileWithCap(join(effectiveCwd, 'durable-memory', 'index.md'));
-    if (memoryContent) {
-      sections.push(
-        `## Durable Memory (durable-memory/index.md)\n\n${memoryContent}\n\n` +
-        `durable-memory/ holds notes for future sessions; keep index.md as a table of contents of one-line pointers.`
-      );
+    // (d) durable-memory/index.md in cwd (optional context file)
+    try {
+      const memoryContent = await readFileWithCap(join(effectiveCwd, 'durable-memory', 'index.md'));
+      if (memoryContent) {
+        sections.push(
+          `## Durable Memory (durable-memory/index.md)\n\n${memoryContent}\n\n` +
+          `durable-memory/ holds notes for future sessions; keep index.md as a table of contents of one-line pointers.`
+        );
+      }
+    } catch (err) {
+      const warning = `warning: failed to read durable-memory/index.md: ${err.message}\n`;
+      if (warn) warn(warning);
+      else try { stderr?.write(warning); } catch {}
     }
-  } catch (err) {
-    const warning = `warning: failed to read durable-memory/index.md: ${err.message}\n`;
-    if (warn) warn(warning);
-    else try { stderr?.write(warning); } catch {}
   }
 
   return sections.join('\n\n');

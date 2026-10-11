@@ -88,11 +88,24 @@ function parseRunArgs(args) {
 function parseChatArgs(args) {
   let model;
   let wrapUp;
+  let system;
+  let systemFile;
+  let contextFiles;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === '-m' || arg === '--model') {
       model = takeOption(args, index, arg);
       index += 1;
+    } else if (arg === '--system') {
+      system = takeOption(args, index, arg);
+      index += 1;
+    } else if (arg === '--system-file') {
+      systemFile = takeOption(args, index, arg);
+      index += 1;
+    } else if (arg === '--context-files') {
+      contextFiles = true;
+    } else if (arg === '--no-context-files') {
+      contextFiles = false;
     } else if (arg === '--wrapup') {
       wrapUp = true;
     } else if (arg === '--no-wrapup') {
@@ -101,7 +114,7 @@ function parseChatArgs(args) {
       throw new MiniplayerError(`Unknown option for chat: ${arg}`);
     }
   }
-  return { model, wrapUp };
+  return { model, wrapUp, system, systemFile, contextFiles };
 }
 
 function parseModelsArgs(args) {
@@ -298,13 +311,28 @@ async function chatCommand(args, io, runtime) {
     if (!isMockRecord(mock)) throw err;
   }
   const records = mock ? [] : (await runtime.loadCatalog?.()?.catch?.(() => []) ?? []);
-  const systemPrompt = await buildInitialSystemPrompt({
-    cwd: process.cwd(),
-    toolsConfig: config?.tools,
-    env: runtime.env,
-    stderr: io.stderr,
-    warn: runtime.warn,
-  });
+  let systemPrompt;
+  if (options.system) {
+    systemPrompt = options.system;
+  } else if (options.systemFile) {
+    try {
+      systemPrompt = await readFile(options.systemFile, 'utf8');
+    } catch (err) {
+      throw new MiniplayerError(`Unable to read system prompt file ${options.systemFile}: ${err.message}`);
+    }
+  } else {
+    const includeContextFiles = options.contextFiles !== undefined
+      ? options.contextFiles
+      : (config.contextFiles !== false);
+    systemPrompt = await buildInitialSystemPrompt({
+      cwd: process.cwd(),
+      toolsConfig: config?.tools,
+      includeContextFiles,
+      env: runtime.env,
+      stderr: io.stderr,
+      warn: runtime.warn,
+    });
+  }
 
   const shouldWrapUp = options.wrapUp !== undefined ? options.wrapUp : (config.wrapUp !== false);
 
