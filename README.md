@@ -1,11 +1,9 @@
 # miniplayer
 
-`miniplayer` is a small Node 20+ CLI for one-shot language-model calls. It selects models from the
-model catalog (schema-version-1 JSON), routes them to a supported provider, and exits after one response.
-The `run` command handles one user request, including any model/tool steps needed
-to answer it. `classify` stays tool-free. `miniplayer acp` supports live multi-turn
-conversations with native tools. Miniplayer does not stream individual tokens,
-resume sessions after process exit, or compact context.
+`miniplayer` is a lightweight, fast Node 20+ CLI harness for language models with pluggable external
+tools, an interactive REPL, one-shot execution, structured classification, and Agent Client Protocol
+(ACP) support. It selects models from the published catalog (schema-version-1 JSON), routes them to
+supported providers, manages external tool execution, and compacts conversation context.
 
 ## Install
 
@@ -20,8 +18,7 @@ miniplayer --help
 ## Model catalog
 
 miniplayer selects models from a published catalog: schema-version-1 JSON containing a `records`
-array. The dataset is compiled from OpenRouter, LiteLLM, and
-Moonshot public data and published at:
+array. The dataset is compiled from OpenRouter, LiteLLM, and Moonshot public data and published at:
 
 ```
 https://lmctl.com/dataset/model_list.json
@@ -46,29 +43,155 @@ Miniplayer operates **online-first with a local cache**:
   specific local file. Pinning disables network checks and cache lookups entirely, ensuring deterministic
   and reproducible behavior in offline and test environments.
 
-## Configuration
+## Interaction modes
 
-Configuration is optional and lives at `~/.config/miniplayer/config.json`. With no config,
-`ollama/qwen2.5:14b` is the primary model and metered `deepseek/deepseek-flash` is its first
-failover. Local-first is free, offloads inference compute, and avoids burning subscription rate
-limits. A minimal file-based DeepSeek credential config is:
+### 1. Interactive REPL (`miniplayer` or `miniplayer chat`)
+
+When invoked on an interactive terminal (TTY) with no subcommands, or via `miniplayer chat`, miniplayer
+starts an interactive REPL session:
+
+```sh
+miniplayer
+miniplayer chat -m ollama/qwen2.5:14b
+```
+
+- **Prompt**: Displays `> ` for user input. Empty lines are ignored.
+- **Tool tracing**: Emits single-line status traces to stderr for each tool invocation: `[tool] <name> <args...>`.
+- **Slash commands**:
+  - `/exit`: Ends the session cleanly and runs a final wrap-up turn (unless disabled).
+  - `/help`: Displays available slash commands and keybindings.
+  - `/compact`: Triggers manual context compaction.
+- **Turn cancellation**: Pressing `Ctrl-C` while a model turn or tool is running cancels that turn and returns to the prompt. Pressing `Ctrl-C` on an empty line exits the REPL.
+- **Wrap-up**: On exit (`/exit` or EOF), miniplayer runs a final turn prompting the model to summarize critical session state into durable memory notes if necessary. Disable wrap-up via the `--no-wrapup` CLI flag or by setting `"wrapUp": false` in configuration.
+- **Non-TTY fallback**: Running `miniplayer` without arguments when stdin is piped (non-TTY) automatically routes to `run` mode reading the prompt from stdin.
+
+### 2. One-shot prompt (`miniplayer run`)
+
+Execute a single prompt and exit immediately after receiving the response:
+
+```sh
+miniplayer run -m gpt-5-nano "Summarize this repository in three bullets"
+cat prompt.txt | miniplayer run
+```
+
+One-shot runs do not trigger wrap-up by default. You can opt in to wrap-up by passing the `--wrapup` flag.
+
+### 3. Response classification (`miniplayer classify`)
+
+Classify a response from stdin or a file without tools:
+
+```sh
+printf '%s\n' 'The assigned fix is complete; send the next task.' |
+  miniplayer classify -m claude-haiku-4-5
+miniplayer classify -m claude-haiku-4-5 --file response.txt
+```
+
+Classification outputs a single compact JSON object:
+
+```json
+{"label":"task-done","reason":"The current task is complete but more may remain","confidence":0.96}
+```
+
+### 4. Agent Client Protocol (`miniplayer acp`)
+
+Miniplayer speaks JSON-RPC over stdin/stdout implementing the Agent Client Protocol (ACP):
+
+```sh
+miniplayer acp -m ollama/qwen2.5:14b
+```
+
+ACP sessions initialize with dynamic system prompts (cwd preamble, tool outlines via parallel `--list`,
+`AGENTS.md`, and `durable-memory/index.md`), execute configured external tools, and run context compaction
+when conversations approach model token limits.
+
+## External tools & permission model
+
+Miniplayer has **no built-in tools**. Tools are supplied exclusively through configuration in
+`~/.config/miniplayer/config.json` (or `$MINIPLAYER_CONFIG`). If no tools are configured, miniplayer
+operates with zero tools.
+
+### Configuration
+
+Tools are declared in the `tools` array as command strings or objects:
 
 ```json
 {
+  "tools": [
+    "git",
+    {
+      "name": "lmgit",
+      "command": "/usr/local/bin/lmgit",
+      "brief": "Git operations tool",
+      "description": "Full schema-driven git operations"
+    }
+  ]
+}
+```
+
+Tool names are normalized to `[a-zA-Z0-9_-]`.
+
+### Security and execution model
+
+1. **Direct child process execution**: Tools are spawned directly using `child_process.spawn(command, args, { shell: false })`. No shell is invoked, preventing shell interpolation and command injection vulnerabilities.
+2. **Process group isolation and clean cancellation**: Each tool is launched in a detached process group. Aborting or cancelling a turn sends `SIGTERM` to the process group (`-pid`), escalating to `SIGKILL` after 500 ms if the process does not terminate.
+3. **Bounded I/O**: Standard output is capped at 256 KiB and standard error at 64 KiB. If limits are exceeded, remaining output is drained and discarded, and the tool result includes `truncated: true`.
+4. **Resilient error handling**: Missing binaries (`ENOENT`) or spawn failures return structured tool error responses back to the model rather than crashing miniplayer.
+
+## Context compaction & no-resume policy
+
+Miniplayer adheres to a **no-resume** policy: it does not reload old conversation history across process
+restarts. Inside live REPL and ACP sessions, long-running conversations are managed through dynamic context
+compaction:
+
+- **Compaction threshold**: Evaluated before each model request. Context token usage is estimated from
+  provider usage metadata or character heuristics (`chars / 4`). If usage exceeds 70% of the model's
+  context window (configurable via `compact.thresholdRatio` or `compact.thresholdTokens`, fallback 100,000
+  tokens), compaction is triggered.
+- **Compaction turn**: Miniplayer calls the model without tools, requesting a JSON object with `{ summary, notes }`.
+- **Context pruning**: All but the last two user turns are replaced with `Context summary: <summary>`. The last two user turns are retained verbatim to preserve immediate conversational context.
+- **Durable memory update**: The generated `notes` are written to `durable-memory/<timestamp>-session-notes.md`, and a pointer is automatically appended to `durable-memory/index.md`.
+- **Failure tolerance**: If compaction fails, miniplayer falls back to the uncompacted context with a stderr warning.
+
+## Configuration file
+
+Configuration lives at `~/.config/miniplayer/config.json`. Set `MINIPLAYER_CONFIG=/path/to/config.json`
+to specify an alternative file path.
+
+Example configuration:
+
+```json
+{
+  "model": "deepseek/deepseek-flash",
   "requestTimeoutMs": 60000,
+  "wrapUp": true,
+  "compact": {
+    "thresholdRatio": 0.7,
+    "thresholdTokens": 100000
+  },
+  "tools": [
+    "git",
+    "lmgit"
+  ],
   "provider": {
     "deepseek": { "apiKey": "..." }
   }
 }
 ```
 
-Set `MINIPLAYER_CONFIG=/path/to/config.json` to use an alternate config path.
-Standalone `run`/`classify` calls retain their configured 60,000 ms default model timeout. ACP turns have no implicit deadline. Set positive-integer config `requestTimeoutMs` or
-environment `MINIPLAYER_REQUEST_TIMEOUT_MS` to override it; the environment value wins. Invalid,
-zero, negative, or excessively large values are configuration errors.
+### Config options
 
-`model` may be used instead of `pool` for a single default. Aliases are resolved before exact catalog
-lookup; matching is never fuzzy. Environment credentials take precedence over config credentials:
+- `model`: Default model selector string.
+- `pool`: Array of model selectors to try in sequence or randomly.
+- `poolOrdered`: When `true`, candidates in `pool` are tried in strict order rather than shuffled.
+- `requestTimeoutMs`: Request timeout in milliseconds for one-shot commands (default 60,000 ms).
+- `wrapUp`: Boolean controlling whether REPL exit runs a durable-memory wrap-up turn (default `true`).
+- `compact`: Object with `thresholdRatio` (float, default 0.7) and/or `thresholdTokens` (integer) to control when context compaction triggers.
+- `tools`: Array of tool command strings or `{ name, command, brief, description }` objects.
+- `provider`: Map of provider credentials and settings (e.g., `apiKey`, `baseURL`).
+
+### Provider credentials and environment variables
+
+Environment variables take precedence over config credentials:
 
 | Route | Supported catalog provider | Environment variable |
 | --- | --- | --- |
@@ -80,231 +203,58 @@ lookup; matching is never fuzzy. Environment credentials take precedence over co
 | LiteLLM / DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` |
 | Local Ollama | `ollama` | `OLLAMA_HOST` (optional; no API key) |
 
-Ollama defaults to `http://localhost:11434/v1`. Set `OLLAMA_HOST` to the server origin, such as
-`http://172.18.32.1:11434`; miniplayer trims trailing slashes and appends `/v1`. A configured
-`provider.ollama.baseURL` overrides the derived URL. Select local models with passthrough IDs such as
-`ollama/qwen2.5:14b`. Ollama is always pool-eligible because it needs no credential; reachability is
-checked only when the call runs.
+Ollama defaults to `http://localhost:11434/v1`. Set `OLLAMA_HOST` to the server origin (such as
+`http://172.18.32.1:11434`). A configured `provider.ollama.baseURL` overrides the derived URL.
 
-To make local Ollama the strict primary and metered DeepSeek failover-only, configure:
+## Using ACP in lmctl Teamfiles
 
-```json
-{
-  "pool": ["ollama/qwen2.5:14b", "deepseek/deepseek-flash"],
-  "poolOrdered": true,
-  "provider": {
-    "deepseek": { "apiKey": "..." }
-  }
-}
+Miniplayer integrates directly with `lmctl` as an ACP provider. You can configure miniplayer as a member
+inside an `lmctl` Teamfile:
+
+```
+_MEMBER_ alias=Worker provider=miniplayer model=anthropic/claude-3-5-sonnet sessiondir=.
 ```
 
-### Model selection and failover
+In `lmctl`, the miniplayer profile invokes `miniplayer acp`. Configured tools from `~/.config/miniplayer/config.json`
+are made available to the member, and conversation turns are processed through ACP JSON-RPC.
 
-Each invocation resolves models in this order:
+## Commands reference
 
-1. `-m <selector>` forces that model and bypasses every pool.
-2. Config `pool` supplies candidates. By default they are randomized for load spreading. With
-   `poolOrdered: true`, the first resolvable, credentialed entry wins and later entries are
-   failover-only.
-3. Config `model` supplies one default model.
-4. With neither, miniplayer first tries `ollama/qwen2.5:14b`, then metered
-   `deepseek/deepseek-flash`. It shuffles the remaining built-in pool for rate-limit, timeout, or
-   connectivity failover: `deepseek/deepseek-v4-flash-20260423`, `deepseek-chat`, `claude-haiku-4-5`,
-   `gemini/gemini-3.7-flash`, `gpt-5-nano`, and `moonshot/kimi-latest-8k`.
-
-Pool entries without credentials are skipped. One eligible entry is chosen randomly, and another is
-tried only when the call reports HTTP 429, rate limiting, quota exhaustion, an AbortSignal timeout,
-or a connectivity failure such as connection refusal, failed fetch, or socket hangup. The timeout
-covers the complete SDK call, including a response that hangs after connecting. HTTP 400/401/500,
-authentication, invalid-model, and other application errors fail immediately. Set
-`MINIPLAYER_DEBUG=1` to write skip and failover details to stderr. If no candidate succeeds, the
-exhaustion error names failed-over and skipped candidates.
-
-`poolOrdered` governs only operator-authored `pool` arrays and defaults to `false`. It does not alter
-the built-in pool, which pins local Qwen first and DeepSeek Flash second before random fallbacks.
-Skipped configured entries still produce one stderr warning with their reasons.
-
-## ACP turns
-
-```sh
-miniplayer acp -m ollama/qwen2.5:14b
-```
-
-This command speaks newline-delimited JSON-RPC on stdin/stdout. It supports
-`initialize`, `session/new`, `session/prompt`, and `session/cancel`.
-Each live `session/new` may receive multiple prompts; miniplayer retains the conversation in
-memory for that ACP process. It emits one `agent_message_chunk` containing the completed reply, followed by
-an `end_turn` result. Cancelled turns return `cancelled`, abort the SDK request,
-and retain known tool/model observations with partial status. There is no implicit ACP prompt timeout;
-`requestTimeoutMs` continues to apply to the existing one-shot commands only.
-
-Turn metadata lives in `$MINIPLAYER_HOME/sessions/<uuid>.json`, defaulting to
-`$XDG_DATA_HOME/miniplayer` or `~/.local/share/miniplayer`. New files are private
-and replaced atomically. They contain the working directory, creation/update
-timestamps, selected provider/model, and per-turn input/output plus native usage
-metadata when available. Credentials/config are not saved. The files are for
-session readers such as `lmctl tail`, export, and cost reporting; they are never
-replayed into a later provider request. Turns are marked `running`, `complete`,
-`aborted`, or `failed`; input and any usage observed before cancellation or failure
-remain recorded, while failed turns have no invented output. `responseId` is a
-local stable accounting identity; a provider response ID is retained separately
-as `nativeResponseId`. Usage carries `usageConvention` so readers know whether
-input includes cached tokens, and Anthropic cache writes are exposed as
-`cacheWriteInputTokens`. Missing usage fields remain absent.
-
-The built-in `mock/Echo`, `mock/Adder`, `mock/RateLimit`, and `mock/ServerError` selectors are
-test-only and bypass config, catalogs, credentials, and network access. `mock/Adder` retains its
-numeric accumulator for live turns but accepts decimal notation only. Mock usage is synthetic and
-recorded as zero tokens with `usageConvention: "synthetic"`.
-
-ACP accepts text prompts and executes the same five native tools as `run`.
-It accepts text and resource links (links are represented as text; they are not
-fetched). It rejects images, audio, embedded resources, and nonempty `mcpServers`;
-configure clients with `mcpServers: []`. It executes tools locally without requesting client filesystem or
-terminal operations. All tools are granted; there is no permission mode or
-interactive TUI. ACP protocol
-version 1 is advertised; unsupported methods return a JSON-RPC error.
-
-Only one writer may prompt a session at a time, even across ACP processes.
-Normal cancellation, EOF, and SIGTERM/SIGINT release the session's `.json.lock`.
-A hard crash can leave a lock; the error identifies it. Verify its recorded PID
-is no longer active before removing that specific lock. Cold resume remains unsupported. Locks are
-never stolen automatically.
-
-Select miniplayer directly by provider/model and optionally choose its session
-directory. It does not require a teamfile alias or a resumable session. Miniplayer
-has no interactive terminal command.
-
-## Native tools
-
-Tool-capable models receive all five tools in `run` and live ACP sessions. There
-are no permission prompts, plan mode, enable/disable flags, or workspace sandbox.
-Relative paths resolve against the session working directory; absolute paths are
-accepted. Explicit mock models remain deterministic and never execute tools.
-
-| Tool | Arguments and bounds |
-| --- | --- |
-| `list_directory` | `path`, optional entry `offset` and `limit`; 200 entries by default, at most 1,000 |
-| `read_file` | `path`, optional byte `offset` and `maxBytes`; 64 KiB by default, at most 256 KiB |
-| `write_file` | `path`, UTF-8 `content`; atomically creates/replaces a regular file, at most 1 MiB, preserves an existing file's mode |
-| `shell` | `command`, optional `cwd`; POSIX shell with at most 64 KiB of combined raw stdout/stderr retained |
-| `webget` | HTTP(S) `url`, optional byte `offset` and `maxBytes`; streaming GET, 64 KiB default and 256 KiB maximum returned body |
-
-Reads return `content`, `bytesRead`, `nextOffset`, `eof` and `truncated`. Offsets
-are bytes, not line numbers; a slice through a UTF-8 code point can contain a
-replacement character. Directory output includes entry names/types and paging
-metadata. Symlink write targets and non-regular file read/write targets are
-rejected. Parent directories for a new file must already exist.
-
-`webget` follows redirects and returns status, final URL and content type.
-Non-2xx bodies remain readable as bounded results. Its offsets apply to the
-response byte stream, and unused body data is cancelled at the limit. It permits
-localhost/private addresses, like other HTTP URLs. Shell output is drained even
-when truncated. Neither tool adds its own time deadline; explicit cancellation
-aborts a web request or terminates the owned shell process group, escalating
-only for cancellation when descendants ignore SIGTERM.
-
-The model/tool loop is bounded to 32 model steps. An unfinished tool loop is an
-error, even if the last step contained interim text. Once a tool starts, a later
-model error cannot trigger automatic pool failover that could repeat effects.
-ACP emits correlated tool-call progress and stores per-model-step usage plus
-bounded tool observations. Known observations survive failure/cancellation;
-unknown usage or I/O stays unknown. Live context retains complete SDK tool-call
-and tool-result messages. Observation files are never used for cold resume.
-
-## Commands
-
-Run a one-shot prompt from an argument or stdin:
-
-```sh
-miniplayer run -m gpt-5-nano "Summarize this in one sentence"
-printf '%s\n' 'Summarize this' | miniplayer run
-```
-
-Classify a team response from stdin (preferred) or a file:
-
-```sh
-printf '%s\n' 'The assigned fix is complete; send the next task.' |
-  miniplayer classify -m claude-haiku-4-5
-miniplayer classify -m claude-haiku-4-5 --file response.txt
-```
-
-Classification emits exactly one compact object with one of five labels:
-
-```json
-{"label":"task-done","reason":"The current task is complete but more may remain","confidence":0.96}
-```
-
-List chat-capable catalog rows and optionally filter them:
+List chat-capable catalog models and optionally filter them:
 
 ```sh
 miniplayer models
 miniplayer models --source openrouter --provider deepseek --max-input-price 1
 ```
 
-The table contains the model ID, provider, total context tokens, and input/output prices per million
-tokens.
+Run one-shot prompt:
 
-## Output and errors
+```sh
+miniplayer run -m deepseek/deepseek-flash "Summarize recent commits"
+```
 
-Successful command results are the only content written to stdout. Diagnostics go to stderr. Exit
-code `0` means success. Exit code `1` covers usage, catalog, pool exhaustion, configuration,
-credential, provider, and API errors. Exit code `2` is reserved for a model response that cannot be
-parsed as a valid classifier object.
+Start interactive chat:
 
-Call selectors resolve in three stages: config alias, exact catalog match, then direct provider
-passthrough. Exact catalog matching checks `gateway_id`, `vendor_model_id`, `source_model_id`, and
-`canonical_slug`; no fuzzy matching occurs. If the catalog has no match, a selector shaped as
-`provider/model` may call `model` directly when `provider` is `deepseek`, `moonshot`, `openai`,
-`anthropic`, `gemini`, or `ollama`. This is why `deepseek/deepseek-flash` and
-`ollama/qwen2.5:14b` work even when absent from the catalog. Passthrough models are call-only and do
-not appear in `miniplayer models` unless a matching catalog record also exists.
+```sh
+miniplayer chat -m ollama/qwen2.5:14b
+```
 
-Bare IDs such as `claude-haiku-4-5` work when that is the catalog value. Other provider-prefixed
-forms work only through an exact catalog value, a configured alias, or the approved passthrough rule.
-For example, `-m claude-haiku-4-5` is a catalog match, while `-m claude/claude-haiku-4-5` would call
-the literal model ID `claude-haiku-4-5` only if `claude` were an approved passthrough provider—it is
-not. Unknown prefixes, unknown bare IDs, and ambiguous catalog matches are errors.
+Run ACP daemon:
 
-If a selector matches multiple catalog records, resolution fails as ambiguous with exit code `1`
-naming the colliding `record_id`s (for example, `deepseek/deepseek-v4-flash` matches both `litellm`
-and `openrouter` catalog rows). When listed in a config `pool`, an ambiguous entry is skipped with a
-stderr warning rather than halting immediately, silently degrading failover coverage. Because
-catalog lookup only matches `gateway_id`, `vendor_model_id`, `source_model_id`, and `canonical_slug`
-(the `record_id` prefix like `litellm:...` is not a supported selector), disambiguate by targeting a
-more specific catalog identifier—such as the OpenRouter canonical slug
-`deepseek/deepseek-v4-flash-20260423`—or using a deterministic provider passthrough such as
-`deepseek/deepseek-flash`.
-
-## Add a LiteLLM provider
-
-Install the matching AI SDK provider package, import its factory in `src/providers.js`, and add one
-entry to `LITELLM_PROVIDERS` with its API-key environment variable and factory. Keep provider mapping
-explicit so a catalog row cannot silently route to the wrong API. Add missing-key and construction
-coverage in `tests/providers.test.js` before enabling it.
+```sh
+miniplayer acp -m deepseek/deepseek-flash
+```
 
 ## Test
+
+Run the hermetic test suite:
 
 ```sh
 npm test
 ```
 
-Tests use the small catalog under `tests/fixtures/`; they do not load the production catalog.
+Unit tests use fixtures in `tests/fixtures/` and do not make network calls or execute external tools.
 
-The ACP integration test starts the real CLI and AI SDK against an ephemeral
-localhost OpenAI-compatible endpoint. It verifies repeated prompts, restart/load,
-cancellation, and process-shutdown lock cleanup without making live model calls.
+## License
 
-A successful turn records the provider response model when supplied by the SDK,
-falling back to the selected catalog model. Context-limit failures remain provider
-errors. A failed initial turn leaves an empty metadata session with no resumable
-conversation state.
-
-
-## License and third-party software
-
-MIT, copyright Lattice Systems LLC; see `LICENSE`. miniplayer depends on the Vercel AI SDK
-(`ai`, `@ai-sdk/anthropic`, `@ai-sdk/google`, `@ai-sdk/openai`, `@ai-sdk/openai-compatible`;
-Apache-2.0) and their transitive dependencies (Apache-2.0, MIT, and BSD-3-Clause/AFL-2.1). They
-are installed from npm and are not bundled or modified here. The provider mapping for
-LiteLLM-sourced model ids follows [LiteLLM](https://github.com/BerriAI/litellm)'s provider names.
+MIT, copyright Lattice Systems LLC; see `LICENSE`.

@@ -1,6 +1,6 @@
 {
   "name": "miniplayer",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "One-shot language model runner and response classifier",
   "type": "module",
   "bin": {
