@@ -273,6 +273,7 @@ async function chatCommand(args, io, runtime) {
   const messages = [];
   let lastUsage = null;
   let currentController = null;
+  let selectedRecord = isMockRecord(mock) ? mock : null;
 
   const hasTTYOutput = Boolean(io.stdin?.isTTY && typeof io.stdout?.on === 'function');
   const rl = createInterface({
@@ -296,7 +297,45 @@ async function chatCommand(args, io, runtime) {
       rl.close();
     }
   };
-  process.on('SIGINT', onSigInt);
+  if (hasTTYOutput) {
+    rl.on('SIGINT', onSigInt);
+  } else {
+    process.on('SIGINT', onSigInt);
+  }
+
+  const runCompaction = async (msgList, customConfig = config) => {
+    return compactSessionContext({
+      messages: msgList,
+      record: selectedRecord,
+      config: customConfig,
+      cwd: process.cwd(),
+      env: runtime.env,
+      generate: async ({ prompt, signal }) => {
+        if (isMockRecord(mock)) {
+          return generateMock({ record: mock, prompt, signal });
+        }
+        return generateFromSelection({
+          explicitSelector: options.model,
+          config,
+          records,
+          prompt,
+          system: undefined,
+          signal,
+          timeoutMs: 0,
+          cwd: process.cwd(),
+          env: runtime.env,
+          random: runtime.random,
+          generate: runtime.generate,
+          debug: runtime.debug,
+          warn: runtime.warn,
+          tools: {}, // NO tools for compaction
+        });
+      },
+      stderr: io.stderr,
+      warn: runtime.warn,
+      lastUsage,
+    });
+  };
 
   try {
     promptUser();
@@ -320,16 +359,7 @@ async function chatCommand(args, io, runtime) {
         continue;
       }
       if (line === '/compact') {
-        const compactRes = await compactSessionContext({
-          messages,
-          record: mock,
-          config: { compact: { thresholdTokens: 0 } },
-          cwd: process.cwd(),
-          env: runtime.env,
-          generate: isMockRecord(mock) ? generateMock : runtime.generate,
-          stderr: io.stderr,
-          warn: runtime.warn,
-        });
+        const compactRes = await runCompaction(messages, { compact: { thresholdTokens: 0 } });
         if (compactRes.compacted) {
           messages.length = 0;
           messages.push(...compactRes.messages);
@@ -340,17 +370,7 @@ async function chatCommand(args, io, runtime) {
 
       // Check compaction before request
       let candidateMessages = [...messages, { role: 'user', content: line }];
-      const compactRes = await compactSessionContext({
-        messages: candidateMessages,
-        record: mock,
-        config,
-        cwd: process.cwd(),
-        env: runtime.env,
-        generate: isMockRecord(mock) ? generateMock : runtime.generate,
-        stderr: io.stderr,
-        warn: runtime.warn,
-        lastUsage,
-      });
+      const compactRes = await runCompaction(candidateMessages);
       if (compactRes.compacted) {
         candidateMessages = compactRes.messages;
         messages.length = 0;
@@ -378,6 +398,7 @@ async function chatCommand(args, io, runtime) {
             messages: candidateMessages,
             system: systemPrompt,
             signal: currentController.signal,
+            timeoutMs: 0,
             cwd: process.cwd(),
             env: runtime.env,
             random: runtime.random,
@@ -400,6 +421,9 @@ async function chatCommand(args, io, runtime) {
         } else {
           messages.push({ role: 'assistant', content: reply });
         }
+        if (providerResult?.record) {
+          selectedRecord = providerResult.record;
+        }
         lastUsage = providerResult?.result?.usage;
       } catch (turnErr) {
         if (currentController.signal.aborted) {
@@ -414,7 +438,11 @@ async function chatCommand(args, io, runtime) {
       promptUser();
     }
   } finally {
-    process.removeListener('SIGINT', onSigInt);
+    if (hasTTYOutput) {
+      rl.removeListener('SIGINT', onSigInt);
+    } else {
+      process.removeListener('SIGINT', onSigInt);
+    }
     rl.close();
   }
 

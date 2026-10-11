@@ -211,11 +211,28 @@ export class AcpAgent {
         let candidateMessages = [...live.messages, { role: 'user', content: text }];
         const compactResult = await compactSessionContext({
           messages: candidateMessages,
-          record: undefined,
+          record: live.selectedRecord,
           config,
           cwd: live.cwd,
           env: this.runtime.env,
-          generate: this.runtime.generate,
+          generate: async ({ prompt, signal }) => {
+            return generateFromSelection({
+              explicitSelector: selector,
+              config,
+              records,
+              prompt,
+              system: undefined,
+              signal,
+              timeoutMs: 0,
+              cwd: live.cwd,
+              env: this.runtime.env,
+              random: this.runtime.random,
+              generate: this.runtime.generate,
+              debug: this.runtime.debug,
+              warn: this.runtime.warn,
+              tools: {}, // no tools for compaction
+            });
+          },
           signal: controller.signal,
           warn: this.runtime.warn,
           stderr: this.runtime.stderr ?? process.stderr,
@@ -265,11 +282,12 @@ export class AcpAgent {
       if (typeof reply !== 'string') throw new Error('Provider did not return text');
       const completedAt = new Date().toISOString();
       const record = providerResult?.record;
+      if (record) live.selectedRecord = record;
       const result = providerResult?.result;
       const selectedModel = record?.vendor_model_id ?? record?.gateway_id ?? record?.source_model_id ?? selector;
       const model = result?.response?.modelId ?? selectedModel;
       const usage = aggregateUsage(result);
-      live.lastUsage = usage;
+      live.lastUsage = result?.usage ?? usage;
       const nativeResponseId = result?.response?.id ?? result?.response?.requestId;
       const stepContext = { turnId: startedTurn.responseId, provider: record?.provider, model, usageConvention: providerResult?.usageConvention, cacheWriteInputTokens: providerResult?.cacheWriteInputTokens };
       const turn = { ...startedTurn, completedAt, status: 'complete', output: { text: reply },

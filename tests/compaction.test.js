@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -97,20 +97,20 @@ test('compactSessionContext replaces older turns, preserves last 2 turns, writes
     });
 
     assert.equal(result.compacted, true);
-    // Messages must start with context summary, then turns 3 and 4 verbatim
+    assert.equal(result.compacted, true);
+    // Messages must have summary folded into the first kept user turn
     assert.equal(result.messages[0].role, 'user');
     assert.ok(result.messages[0].content.startsWith('Context summary: Mock compacted summary'));
+    assert.ok(result.messages[0].content.includes('User turn 3: run migration'));
 
-    // Check last 2 turns are kept verbatim
-    assert.equal(result.messages[1].role, 'user');
-    assert.equal(result.messages[1].content, 'User turn 3: run migration');
-    assert.equal(result.messages[2].role, 'assistant');
-    assert.equal(result.messages[3].role, 'tool');
-    assert.equal(result.messages[3].tool_call_id, 'tc-1');
-    assert.equal(result.messages[4].role, 'assistant');
-    assert.equal(result.messages[5].role, 'user');
-    assert.equal(result.messages[5].content, 'User turn 4: verify db');
-    assert.equal(result.messages[6].role, 'assistant');
+    // Check rest of last 2 turns are kept verbatim
+    assert.equal(result.messages[1].role, 'assistant');
+    assert.equal(result.messages[2].role, 'tool');
+    assert.equal(result.messages[2].tool_call_id, 'tc-1');
+    assert.equal(result.messages[3].role, 'assistant');
+    assert.equal(result.messages[4].role, 'user');
+    assert.equal(result.messages[4].content, 'User turn 4: verify db');
+    assert.equal(result.messages[5].role, 'assistant');
 
     // Stderr output verified
     assert.ok(stderrLines.some(line => line.includes('[compacted:')));
@@ -122,6 +122,78 @@ test('compactSessionContext replaces older turns, preserves last 2 turns, writes
     // Check durable-memory/index.md pointer was appended
     const indexContent = await readFile(join(cwd, 'durable-memory', 'index.md'), 'utf8');
     assert.ok(indexContent.includes(result.notesFile.split('/').pop()));
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('repeated compaction folds summary of previous summary and handles index.md formatting', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'miniplayer-compact-repeat-'));
+  try {
+    // Pre-create index.md without trailing newline to test clean append
+    await mkdir(join(cwd, 'durable-memory'), { recursive: true });
+    await writeFile(join(cwd, 'durable-memory', 'index.md'), '# Existing Index without newline', 'utf8');
+
+    const messages = [
+      { role: 'user', content: 'Turn 1' },
+      { role: 'assistant', content: 'A1' },
+      { role: 'user', content: 'Turn 2' },
+      { role: 'assistant', content: 'A2' },
+      { role: 'user', content: 'Turn 3' },
+      { role: 'assistant', content: 'A3' },
+    ];
+
+    let compactions = 0;
+    const generate = async ({ prompt }) => {
+      compactions++;
+      return JSON.stringify({
+        summary: `Summary #${compactions}`,
+        notes: `Notes #${compactions}`,
+      });
+    };
+
+    // First compaction
+    const res1 = await compactSessionContext({
+      messages,
+      config: { compact: { thresholdTokens: 1 } },
+      cwd,
+      generate,
+    });
+    assert.equal(res1.compacted, true);
+    assert.equal(res1.messages[0].role, 'user');
+    assert.ok(res1.messages[0].content.includes('Summary #1'));
+    assert.ok(res1.messages[0].content.includes('Turn 2'));
+
+    // Check index.md has clean newline before appended pointer
+    const index1 = await readFile(join(cwd, 'durable-memory', 'index.md'), 'utf8');
+    assert.ok(index1.startsWith('# Existing Index without newline\n- ['));
+
+    // Add more turns
+    const extendedMessages = [
+      ...res1.messages,
+      { role: 'user', content: 'Turn 4' },
+      { role: 'assistant', content: 'A4' },
+      { role: 'user', content: 'Turn 5' },
+      { role: 'assistant', content: 'A5' },
+    ];
+
+    // Second compaction (repeated compaction)
+    const res2 = await compactSessionContext({
+      messages: extendedMessages,
+      config: { compact: { thresholdTokens: 1 } },
+      cwd,
+      generate,
+    });
+    assert.equal(res2.compacted, true);
+    assert.equal(res2.messages[0].role, 'user');
+    assert.ok(res2.messages[0].content.includes('Summary #2'));
+    assert.ok(res2.messages[0].content.includes('Turn 4'));
+
+    // Index must have 2 distinct note entries and no duplicates
+    const index2 = await readFile(join(cwd, 'durable-memory', 'index.md'), 'utf8');
+    const pointers = index2.split('\n').filter(line => line.startsWith('- ['));
+    assert.equal(pointers.length, 2);
+    assert.notEqual(pointers[0], pointers[1]);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }

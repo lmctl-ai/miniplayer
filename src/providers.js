@@ -197,7 +197,7 @@ export async function generateOneShot({
   try {
     controller.signal.throwIfAborted();
     const model = createModel(record, config, env);
-    const toolSet = tools ?? createExternalTools({
+    const toolSet = tools !== undefined ? tools : createExternalTools({
       toolsConfig: config?.tools,
       cwd,
       env,

@@ -144,6 +144,7 @@ export async function generateFromSelection({
   warn,
   onResult,
   cwd,
+  tools,
   onToolEvent,
 }) {
   signal?.throwIfAborted();
@@ -159,6 +160,7 @@ export async function generateFromSelection({
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(onResult !== undefined ? { onResult } : {}),
     ...(cwd !== undefined ? { cwd } : {}),
+    ...(tools !== undefined ? { tools } : {}),
     ...(onToolEvent !== undefined || cwd !== undefined ? { onToolEvent: observeTool } : {}),
   };
   const plan = createExecutionPlan({ explicitSelector, config, records, env, random });

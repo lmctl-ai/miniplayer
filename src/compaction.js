@@ -1,4 +1,4 @@
-import { appendFile, mkdir, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export const DEFAULT_FALLBACK_THRESHOLD_TOKENS = 100_000;
@@ -111,34 +111,63 @@ export async function compactSessionContext({
       signal,
       cwd,
       timeoutMs: 0,
-      tools: undefined, // no tools for compaction
+      tools: {}, // no tools for compaction
     });
 
     const parsed = parseCompactionJson(reply);
 
-    // Format UTC timestamp: yyyy-mm-dd-hhmm
+    // Format UTC timestamp: yyyy-mm-dd-hhmmss
     const now = new Date();
     const yyyy = now.getUTCFullYear();
     const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
     const dd = String(now.getUTCDate()).padStart(2, '0');
     const hh = String(now.getUTCHours()).padStart(2, '0');
     const min = String(now.getUTCMinutes()).padStart(2, '0');
-    const filename = `${yyyy}-${mm}-${dd}-${hh}${min}-session-notes.md`;
+    const ss = String(now.getUTCSeconds()).padStart(2, '0');
+    const baseName = `${yyyy}-${mm}-${dd}-${hh}${min}${ss}-session-notes`;
 
     const durableDir = join(cwd, 'durable-memory');
     await mkdir(durableDir, { recursive: true });
 
-    const notesPath = join(durableDir, filename);
-    await writeFile(notesPath, parsed.notes.trim() + '\n', 'utf8');
+    let filename = `${baseName}.md`;
+    let notesPath = join(durableDir, filename);
+    let suffix = 0;
+    while (true) {
+      try {
+        await writeFile(notesPath, parsed.notes.trim() + '\n', { encoding: 'utf8', flag: 'wx' });
+        break;
+      } catch (err) {
+        if (err.code === 'EEXIST') {
+          suffix++;
+          filename = `${baseName}-${suffix}.md`;
+          notesPath = join(durableDir, filename);
+        } else {
+          throw err;
+        }
+      }
+    }
 
-    // Make sure index.md exists and append one-line pointer to it
     const indexPath = join(durableDir, 'index.md');
-    const pointer = `- [${filename}](./${filename}): Session notes from ${yyyy}-${mm}-${dd} ${hh}:${min} UTC\n`;
-    await appendFile(indexPath, pointer, 'utf8');
+    const pointer = `- [${filename}](./${filename}): Session notes from ${yyyy}-${mm}-${dd} ${hh}:${min}:${ss} UTC\n`;
+    let existingIndex = '';
+    try {
+      existingIndex = await readFile(indexPath, 'utf8');
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+    if (!existingIndex.includes(filename)) {
+      const needsLeadingNewline = existingIndex.length > 0 && !existingIndex.endsWith('\n');
+      await appendFile(indexPath, (needsLeadingNewline ? '\n' : '') + pointer, 'utf8');
+    }
 
+    const firstKept = toKeep[0];
+    const foldedFirstUser = {
+      ...firstKept,
+      content: `Context summary: ${parsed.summary.trim()}\n\n${firstKept.content}`,
+    };
     const compactedMessages = [
-      { role: 'user', content: `Context summary: ${parsed.summary.trim()}` },
-      ...toKeep,
+      foldedFirstUser,
+      ...toKeep.slice(1),
     ];
 
     const newTokens = estimateContextTokens(compactedMessages, null);
