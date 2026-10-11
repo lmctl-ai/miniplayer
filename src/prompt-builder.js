@@ -43,18 +43,30 @@ async function getToolOutline(toolSpec, cwd, env) {
       resolveResult(result);
     };
 
+    let child;
+    const killGroup = (sig = 'SIGKILL') => {
+      try {
+        if (child?.pid) process.kill(-child.pid, sig);
+      } catch {}
+    };
+
     let timer = setTimeout(() => {
-      try { child.kill('SIGTERM'); } catch {}
+      try {
+        child?.stdout?.destroy?.();
+        child?.stderr?.destroy?.();
+        killGroup('SIGTERM');
+        setTimeout(() => killGroup('SIGKILL'), 250).unref?.();
+      } catch {}
       finish(null);
     }, 3000);
     timer.unref?.();
 
-    let child;
     try {
       child = spawn(command, ['--list'], {
         shell: false,
         cwd,
         env,
+        detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch {
@@ -64,7 +76,17 @@ async function getToolOutline(toolSpec, cwd, env) {
     child.stdout.on('data', chunk => {
       stdout += chunk;
       if (stdout.length > 32 * 1024) {
-        try { child.kill('SIGTERM'); } catch {}
+        child.stdout.destroy();
+        child.stderr.destroy();
+        killGroup('SIGKILL');
+      }
+    });
+
+    let stderrBytes = 0;
+    child.stderr.on('data', chunk => {
+      stderrBytes += chunk.length;
+      if (stderrBytes > 32 * 1024) {
+        child.stderr.destroy();
       }
     });
 
@@ -93,6 +115,8 @@ export async function buildInitialSystemPrompt({
   cwd = process.cwd(),
   toolsConfig = [],
   env = process.env,
+  stderr = process.stderr,
+  warn,
 } = {}) {
   const effectiveCwd = resolve(cwd);
   const sections = [];
@@ -101,7 +125,7 @@ export async function buildInitialSystemPrompt({
   sections.push(
     `You are running in directory: ${effectiveCwd}\n` +
     `Stateless one-shot tools are available for operations.\n` +
-    `Large outputs are saved to files by the tools; read them with file tools as needed.`
+    `Large outputs are saved to files by the tools; read them with your configured tools as needed.`
   );
 
   // (b) Configured tools outline
@@ -122,18 +146,30 @@ export async function buildInitialSystemPrompt({
   }
 
   // (c) AGENTS.md in cwd
-  const agentsContent = await readFileWithCap(join(effectiveCwd, 'AGENTS.md'));
-  if (agentsContent) {
-    sections.push(`## Instructions (AGENTS.md)\n\n${agentsContent}`);
+  try {
+    const agentsContent = await readFileWithCap(join(effectiveCwd, 'AGENTS.md'));
+    if (agentsContent) {
+      sections.push(`## Instructions (AGENTS.md)\n\n${agentsContent}`);
+    }
+  } catch (err) {
+    const warning = `warning: failed to read AGENTS.md: ${err.message}\n`;
+    if (warn) warn(warning);
+    else try { stderr?.write(warning); } catch {}
   }
 
   // (d) durable-memory/index.md in cwd
-  const memoryContent = await readFileWithCap(join(effectiveCwd, 'durable-memory', 'index.md'));
-  if (memoryContent) {
-    sections.push(
-      `## Durable Memory (durable-memory/index.md)\n\n${memoryContent}\n\n` +
-      `durable-memory/ holds notes for future sessions; keep index.md as a table of contents of one-line pointers.`
-    );
+  try {
+    const memoryContent = await readFileWithCap(join(effectiveCwd, 'durable-memory', 'index.md'));
+    if (memoryContent) {
+      sections.push(
+        `## Durable Memory (durable-memory/index.md)\n\n${memoryContent}\n\n` +
+        `durable-memory/ holds notes for future sessions; keep index.md as a table of contents of one-line pointers.`
+      );
+    }
+  } catch (err) {
+    const warning = `warning: failed to read durable-memory/index.md: ${err.message}\n`;
+    if (warn) warn(warning);
+    else try { stderr?.write(warning); } catch {}
   }
 
   return sections.join('\n\n');

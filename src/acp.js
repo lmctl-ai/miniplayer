@@ -159,7 +159,9 @@ export class AcpAgent {
         cwd: session.cwd,
         toolsConfig: config?.tools,
         env: this.runtime.env,
-      }).catch(() => '');
+        stderr: this.runtime.stderr ?? process.stderr,
+        warn: this.runtime.warn,
+      });
       this.loaded.set(session.id, { cwd: session.cwd, messages: [], systemPrompt, lastUsage: null });
       return { sessionId: session.id };
     }

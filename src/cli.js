@@ -195,7 +195,9 @@ async function runCommand(args, io, runtime, preloadedPrompt) {
     cwd: process.cwd(),
     toolsConfig: config?.tools,
     env: runtime.env,
-  }).catch(() => '');
+    stderr: io.stderr,
+    warn: runtime.warn,
+  });
 
   const text = await generateFromSelection({
     explicitSelector: options.model,
@@ -271,7 +273,9 @@ async function chatCommand(args, io, runtime) {
     cwd: process.cwd(),
     toolsConfig: config?.tools,
     env: runtime.env,
-  }).catch(() => '');
+    stderr: io.stderr,
+    warn: runtime.warn,
+  });
 
   const shouldWrapUp = options.wrapUp !== undefined ? options.wrapUp : (config.wrapUp !== false);
 

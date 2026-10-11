@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -79,3 +79,57 @@ test('buildInitialSystemPrompt includes durable-memory/index.md and caps at 32 K
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('unreadable AGENTS.md warns on stderr and skips only that section', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'miniplayer-prompt-unreadable-'));
+  try {
+    const agentsPath = join(dir, 'AGENTS.md');
+    await writeFile(agentsPath, 'secret content');
+    await chmod(agentsPath, 0o000);
+
+    const warnings = [];
+    const prompt = await buildInitialSystemPrompt({
+      cwd: dir,
+      warn: (msg) => warnings.push(msg),
+    });
+
+    assert.ok(prompt.includes('You are running in directory:'));
+    assert.ok(!prompt.includes('## Instructions (AGENTS.md)'));
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].includes('AGENTS.md'));
+  } finally {
+    try { await chmod(join(dir, 'AGENTS.md'), 0o644); } catch {}
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('--list reader terminates runaway SIGTERM-ignoring tool at 32 KiB cap with SIGKILL', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'miniplayer-spew-test-'));
+  try {
+    const scriptPath = join(dir, 'spew.js');
+    await writeFile(scriptPath, `#!/usr/bin/env node
+process.on('SIGTERM', () => {});
+const buf = Buffer.alloc(64 * 1024, 'X');
+setInterval(() => {
+  try { process.stdout.write(buf); } catch { process.exit(0); }
+}, 10);
+`, { mode: 0o755 });
+
+    const initialRss = process.memoryUsage().rss;
+    const start = Date.now();
+    const prompt = await buildInitialSystemPrompt({
+      cwd: dir,
+      toolsConfig: [{ name: 'spew', command: scriptPath }],
+    });
+    const elapsed = Date.now() - start;
+    const finalRss = process.memoryUsage().rss;
+
+    assert.ok(prompt.includes('### spew'));
+    assert.ok(prompt.includes('run `'));
+    assert.ok(finalRss - initialRss < 50 * 1024 * 1024, `RSS grew too much: ${finalRss - initialRss}`);
+    assert.ok(elapsed < 4000, `Took too long: ${elapsed}ms`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
