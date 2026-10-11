@@ -175,3 +175,18 @@ test('pre-aborted signal throws immediately without spawning', async () => {
 
   await assert.rejects(tools.faketool.execute({ args: ['echo', 'hi'] }), { name: 'AbortError' });
 });
+
+test('external tool handles tool early exit with large stdin without EPIPE crash', async () => {
+  const tools = createExternalTools({
+    toolsConfig: [faketool],
+  });
+  const largeStdin = 'a'.repeat(2 * 1024 * 1024); // 2 MiB
+  const res = await tools.faketool.execute({
+    args: ['fail', 'immediate failure'],
+    stdin: largeStdin,
+  });
+  assert.equal(res.exit_code, 1);
+  assert.equal(res.stdout, '');
+  assert.ok(res.stderr.includes('immediate failure'));
+});
+

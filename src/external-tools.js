@@ -159,6 +159,7 @@ export function executeExternalTool({
       signal?.addEventListener('abort', onAbort, { once: true });
     }
 
+    child.stdin.on('error', () => {});
     if (stdin !== undefined && typeof stdin === 'string') {
       child.stdin.end(stdin, 'utf8');
     } else {
