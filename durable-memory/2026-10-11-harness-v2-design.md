@@ -69,3 +69,36 @@ Miniplayer operates at three distinct operational levels:
 3. **Level 3 — Extended Toolsets (`lmgit`, `lmgh`, `lmaws`, etc.)**:
    - Coder's assistant, issue and PR updater, deployment helper.
    - Note on role: Miniplayer is an interactive reasoning assistant and synthesizer, NOT a standalone monolithic coder or test runner. Risky or deterministic operations (such as compiling code, running full test suites, or multi-step release scripts) belong in deterministic orchestrators like `lmscript`. `lmscript` executes recipes reliably and feeds structured results to miniplayer for interpretation and diagnosis.
+
+## Design Correction: Prompt In, Text Out & Optional Tool Support (2026-10-11)
+
+### Context & Principle
+The owner clarified the foundational principle of Miniplayer:
+**PROMPT IN, TEXT OUT**.
+
+Miniplayer has no concept of skills or autonomous tool dependencies; it does not depend on provider tool-calling support, ensuring it works reliably with weak local models (such as `ollama/qwen2.5:14b`, which do tool use badly). In an `lmscript`-driven environment, the script decides everything: it runs deterministic recipes, tools, and probes, feeding structured output directly into the prompt. Miniplayer's role is purely interpretation and classification.
+
+### Key Corrections
+1. **Pure One-Shot Execution (`run`, `classify`)**:
+   - `miniplayer run` and `miniplayer classify` are pure: the model receives exactly what the caller passed (`stdin`, argv, `--file`), plus an optional caller system prompt (`--system <text>` or `--system-file <path>`).
+   - No working directory preamble, no tool outlines, no context files (`AGENTS.md`, `durable-memory/index.md`), and no wrap-up (unless `--wrapup`).
+   - No tools are ever passed in the provider request body.
+2. **Context Files are Optional Everywhere**:
+   - `run` and `classify`: Context files are OFF (never read).
+   - `chat` and `acp`: Context files are ON by default, but toggleable via `--no-context-files` / `--context-files` or config `"contextFiles": false`.
+   - Missing or unreadable context files are non-fatal and silently omitted.
+   - Caller system prompt overrides (`--system <text>` or `--system-file <path>`): caller owns the system prompt completely; when provided, miniplayer skips preambles, tool outlines, and context files.
+3. **Demoted External Tool Support**:
+   - Tools are an optional feature active only in interactive sessions (`chat`, `acp`) when `tools` are configured.
+   - Catalog capability check: If a selected model has `capabilities.supports_function_calling === false`, miniplayer warns on stderr (`warning: Model <id> does not support tool calling; running without tools.`) and executes tool-free without sending tools to the provider.
+4. **Local Ollama Support**:
+   - Automated test suite remains hermetic using local OpenAI-compatible stubs.
+   - Added `scripts/manual-ollama-check.sh` allowing WSL2 team members to verify `run`, `classify`, and `run --system-file` against local Ollama (`ollama/qwen2.5:14b`, honoring `OLLAMA_HOST`).
+
+### CHANGELOG
+- **cli**: Added `--file`, `--system`, `--system-file`, `--compact` flags to `run` and `classify`.
+- **cli/acp**: Added `--system`, `--system-file`, `--context-files`, and `--no-context-files` flags to `chat` and `acp`.
+- **prompt-builder**: Added `includeContextFiles` option to `buildInitialSystemPrompt`.
+- **config**: Added boolean `contextFiles` setting to config schema.
+- **pool/providers**: Added tool-calling capability check against `capabilities.supports_function_calling === false`, emitting stderr warning and stripping tools.
+- **scripts**: Added `scripts/manual-ollama-check.sh` and syntax/executable validation test.

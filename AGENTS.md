@@ -1,20 +1,37 @@
 # AGENTS.md — Contributor & Agent Guide for Miniplayer (Harness v2)
 
-Welcome to `miniplayer`. This repository provides a fast, minimal Node 20+ ESM harness for language models with pluggable external tools, interactive REPL, and Agent Client Protocol (ACP) support.
+Welcome to `miniplayer`. This repository provides a fast, minimal Node 20+ ESM harness for language models built on the core principle: **PROMPT IN, TEXT OUT**.
 
-## Harness v2 Design Overview
+Miniplayer has no concept of skills or autonomous tool dependencies; it does not depend on provider tool-calling support, ensuring reliable operation even with weak local models (such as `ollama/qwen2.5:14b`). In the `lmscript`-driven setting, the orchestrator script decides everything: it runs deterministic recipes, tools, and probes, feeding structured output directly into the prompt. Miniplayer serves as an interpreter and classifier.
 
-1. **Zero Built-In Tools**: Miniplayer ships with NO built-in tools. Tools are supplied exclusively through configuration (`~/.config/miniplayer/config.json` or `$MINIPLAYER_CONFIG`). Missing or empty `tools` config means zero tools are exposed.
-2. **External Tool Bridge (`src/external-tools.js`)**: Configured tools are exposed to the AI SDK as function tools taking `{ args: string[], stdin?: string }`. Each tool execution spawns a child process (`shell: false`) with detached process group, bounded output buffers (256 KiB stdout, 64 KiB stderr, `truncated` flags), and clean cancellation (SIGTERM then SIGKILL after 250 ms to process group).
-3. **Initial Prompt Composition (`src/prompt-builder.js`)**: Every interactive REPL or ACP session builds a system prompt from:
-   - Preamble with current working directory.
-   - Outlines from configured external tools run in parallel with `--list` (3s timeout, 25-line cap, fallback to config `brief` or `--help`).
-   - Project instructions from `AGENTS.md` (capped at 32 KiB).
-   - Knowledge index from `durable-memory/index.md` (capped at 32 KiB) with instructions to read notes with configured tools as needed.
-4. **Lifecycle & Wrap-Up (`src/cli.js`, `src/acp.js`)**:
-   - REPL (`miniplayer` on TTY or `miniplayer chat`): prompts `> `, displays single-line tool traces `[tool] <name> <args...>` on stderr, supports `/exit`, `/help`, `/compact`, and Ctrl-C turn cancellation (cancels running turn; idle Ctrl-C exits 0 with wrap-up).
-   - Wrap-up: When exiting REPL (via `/exit` or EOF), a final turn is requested to update durable memory. Disable via `--no-wrapup` or config `wrapUp: false`. One-shot `miniplayer run` can opt in via `--wrapup`.
-5. **No Cold Resume & Context Compaction (`src/compaction.js`)**: Miniplayer does not restore past sessions across restarts. When conversation length exceeds the compaction threshold (default 70% of catalog context window or 100k tokens), miniplayer calls the model without tools to generate a summary and notes. Older turns are replaced with `Context summary: <summary>`, the last 2 user turns remain verbatim, notes are written to `durable-memory/<UTC yyyy-mm-dd-hhmmss>-session-notes.md`, and `durable-memory/index.md` is updated.
+## Core Architecture & Design Principles
+
+1. **Pure One-Shot Execution (`run`, `classify`)**:
+   - `miniplayer run` and `miniplayer classify` are **pure**: the model receives strictly what the caller provided (stdin, argv, `--file`), plus an optional caller system prompt (`--system <text>` or `--system-file <path>`).
+   - No working directory preamble, no tool outlines, and no context files are injected.
+   - Tools are **never** passed to the provider in `run` or `classify`.
+   - Wrap-up does not run by default (opt-in via `--wrapup`).
+2. **Context Files are Optional Material**:
+   - `AGENTS.md` and `durable-memory/index.md` are optional prompt material.
+   - In `run` and `classify`: Context files are **always OFF** (never read).
+   - In `chat` and `acp`: Context files are ON by default, but toggleable via `--no-context-files` / `--context-files` or config `"contextFiles": false`.
+   - Missing or unreadable context files are non-fatal and omitted silently.
+3. **Prompt Precedence & Ownership**:
+   - The caller owns the system prompt completely when passing `--system <text>` or `--system-file <path>`.
+   - When specified, this replaces all built-in composition across all modes (`run`, `classify`, `chat`, `acp`) with no preamble, no tool outlines, and no context files.
+   - In `chat` and `acp` without caller overrides, the system prompt composes: preamble, tool outlines (if configured and supported), and context files (if enabled).
+4. **External Tools Demoted to Optional Feature (`src/external-tools.js`)**:
+   - Miniplayer ships with NO built-in tools.
+   - Tools are active only when configured in `~/.config/miniplayer/config.json` (or `$MINIPLAYER_CONFIG`) AND the session is interactive (`chat` or `acp`).
+   - **Capability Gate**: If the catalog entry for the selected model defines `capabilities.supports_function_calling === false`, miniplayer warns on stderr (`warning: Model <id> does not support tool calling; running without tools.`) and executes tool-free without sending tools to the provider.
+   - Configured tools are spawned directly via `child_process.spawn(command, args, { shell: false })` in a detached process group, with bounded output (256 KiB stdout, 64 KiB stderr, `truncated` flags), clean cancellation (SIGTERM then SIGKILL to process group), and EPIPE tolerance on stdin.
+5. **Interactive REPL & ACP (`src/cli.js`, `src/acp.js`)**:
+   - REPL (`miniplayer` on TTY or `miniplayer chat`): prompts `> `, displays single-line stderr tool traces `[tool] <name> <args...>`, and supports `/exit`, `/help`, `/compact`, and Ctrl-C turn cancellation (cancels running turn; idle Ctrl-C exits 0 with wrap-up).
+   - Wrap-up: When exiting REPL (via `/exit`, EOF, or idle Ctrl-C), a final turn summarizes session notes into durable memory. Disable via `--no-wrapup` or config `wrapUp: false`.
+   - ACP: Implements Agent Client Protocol JSON-RPC over stdin/stdout.
+6. **No Cold Resume & Context Compaction (`src/compaction.js`)**:
+   - Miniplayer does not restore past sessions across process restarts.
+   - In live sessions exceeding compaction thresholds, a tool-free compaction turn generates `{ summary, notes }`. Older turns are folded into a summary block, the last 2 user turns remain verbatim, notes are written to `durable-memory/<timestamp>-session-notes.md`, and pointers are appended to `durable-memory/index.md`.
 
 ## Running Tests
 
@@ -24,7 +41,7 @@ All tests are hermetic and run via Node's native test runner without network or 
 npm test
 ```
 
-Unit tests use `tests/fixtures/faketool.js` to simulate external tools.
+Unit tests use `tests/fixtures/faketool.js` to simulate external tools, and mock OpenAI/catalog responses locally.
 
 ## Adding a Tool to Configuration
 
@@ -44,6 +61,16 @@ Add an entry to `~/.config/miniplayer/config.json`:
 ```
 
 Tool names are sanitized to `[a-zA-Z0-9_-]`. The command must be an executable binary in `$PATH` or an absolute path.
+
+## Manual Ollama Verification
+
+To verify real behavior on WSL2 or local setups with Ollama:
+
+```bash
+./scripts/manual-ollama-check.sh
+```
+
+Tests `run`, `classify`, and `run --system-file` against `OLLAMA_HOST` (default `http://localhost:11434`) using `ollama/qwen2.5:14b`.
 
 ## Testing via ACP
 

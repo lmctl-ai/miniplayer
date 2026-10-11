@@ -1,9 +1,16 @@
 # miniplayer
 
-`miniplayer` is a lightweight, fast Node 20+ CLI harness for language models with pluggable external
-tools, an interactive REPL, one-shot execution, structured classification, and Agent Client Protocol
-(ACP) support. It selects models from the published catalog (schema-version-1 JSON), routes them to
-supported providers, manages external tool execution, and compacts conversation context.
+`miniplayer` is a fast, lightweight Node 20+ CLI harness for language models built on one core principle:
+**PROMPT IN, TEXT OUT**. It has no concept of skills or autonomous tool dependencies; it does not depend
+on LLM provider tool-calling support, so it works reliably with weak local models (such as `ollama/qwen2.5:14b`
+running without tool use).
+
+In the `lmscript`-driven setting, the script decides everything: it runs tools, probes, and builds deterministically,
+and puts the results directly into the prompt; miniplayer only interprets.
+
+The core product story:
+1. **Pure classifier & interpreter for `lmscript`** (stdin/file in, text/JSON out): fully deterministic, tool-free, and ideal for automation.
+2. **Interactive assistant with external tools** (optional): accessible in interactive REPL (`chat`) and Agent Client Protocol (`acp`) when tools are configured.
 
 ## Install
 
@@ -53,6 +60,8 @@ starts an interactive REPL session:
 ```sh
 miniplayer
 miniplayer chat -m ollama/qwen2.5:14b
+miniplayer chat -m ollama/qwen2.5:14b --no-context-files
+miniplayer chat -m deepseek/deepseek-flash --system-file custom-sys.txt
 ```
 
 - **Prompt**: Displays `> ` for user input. Empty lines are ignored.
@@ -65,25 +74,29 @@ miniplayer chat -m ollama/qwen2.5:14b
 - **Wrap-up**: On exit (`/exit`, EOF, or idle `Ctrl-C`), miniplayer runs a final turn prompting the model to summarize critical session state into durable memory notes if necessary. Disable wrap-up via the `--no-wrapup` CLI flag or by setting `"wrapUp": false` in configuration.
 - **Non-TTY fallback**: Running `miniplayer` without arguments when stdin is piped (non-TTY) automatically routes to `run` mode reading the prompt from stdin.
 
-### 2. One-shot prompt (`miniplayer run`)
+### 2. Pure one-shot prompt (`miniplayer run`)
 
-Execute a single prompt and exit immediately after receiving the response:
+Execute a single prompt and exit immediately after receiving the response. `run` is **pure**: it never sends tools to the provider, includes no cwd preamble, and reads no context files. The model receives strictly the prompt given:
 
 ```sh
 miniplayer run -m gpt-5-nano "Summarize this repository in three bullets"
-cat prompt.txt | miniplayer run
+cat prompt.txt | miniplayer run -m ollama/qwen2.5:14b
+miniplayer run -m ollama/qwen2.5:14b --file prompt.txt
+miniplayer run -m deepseek/deepseek-flash --system "You are an expert editor." "Review this diff"
+miniplayer run -m ollama/qwen2.5:14b --system-file sys.txt < input.txt
 ```
 
 One-shot runs do not trigger wrap-up by default. You can opt in to wrap-up by passing the `--wrapup` flag.
 
-### 3. Response classification (`miniplayer classify`)
+### 3. Pure response classification (`miniplayer classify`)
 
-Classify a response from stdin or a file without tools:
+Classify a response from stdin or a file without tools or extra system material:
 
 ```sh
 printf '%s\n' 'The assigned fix is complete; send the next task.' |
   miniplayer classify -m claude-haiku-4-5
-miniplayer classify -m claude-haiku-4-5 --file response.txt
+miniplayer classify -m ollama/qwen2.5:14b --file response.txt
+miniplayer classify -m ollama/qwen2.5:14b --system "Custom classification rules" --file response.txt
 ```
 
 Classification outputs a single compact JSON object:
@@ -98,18 +111,49 @@ Miniplayer speaks JSON-RPC over stdin/stdout implementing the Agent Client Proto
 
 ```sh
 miniplayer acp -m ollama/qwen2.5:14b
+miniplayer acp -m deepseek/deepseek-flash --no-context-files
+miniplayer acp -m deepseek/deepseek-flash --system-file agent-prompt.txt
 ```
 
 ACP sessions initialize with dynamic system prompts (cwd preamble, tool outlines via parallel `--list`,
 `AGENTS.md`, and `durable-memory/index.md`), execute configured external tools, and run context compaction
 when conversations approach model token limits.
 
+## Who decides the initial prompt (precedence)
+
+Miniplayer follows strict precedence for constructing the system prompt:
+
+1. **Level 1 — Explicit caller override (`--system <text>` or `--system-file <path>`)**:
+   The caller owns the system prompt completely. Miniplayer injects **nothing else**: no cwd preamble, no tool outlines, and no context files. Supported across `run`, `classify`, `chat`, and `acp`.
+2. **Level 2 — Context files (`AGENTS.md` and `durable-memory/index.md`)**:
+   Context files are optional reference material:
+   - In `run` and `classify`: Context files are **always OFF**.
+   - In `chat` and `acp`: Context files are **ON by default**, but can be disabled via the `--no-context-files` CLI flag or by configuring `"contextFiles": false` in `~/.config/miniplayer/config.json`.
+   - Missing context files are never an error (silently omitted).
+3. **Level 3 — Configured tool outlines**:
+   Outlines via `<command> --list` are gathered **only in interactive `chat` and `acp` sessions**, and only if the `tools` array in configuration is non-empty. `run` and `classify` never generate tool outlines or send tools.
+4. **Default fallback**:
+   If no system override is provided, interactive sessions receive the directory preamble, tool outlines (if tools are configured), and context files (if enabled). Pure `run` and `classify` receive no system prompt unless `--system` or `--system-file` is specified.
+
 ## External tools
 
-Miniplayer has **no built-in tools**. Tools are supplied exclusively through configuration in
-`~/.config/miniplayer/config.json` (or `$MINIPLAYER_CONFIG`). Permissions and execution policies live
-within each standalone tool executable; miniplayer discovers tool outlines via parallel `--list` calls
-and invokes tools directly as child processes. If no tools are configured, miniplayer operates with zero tools.
+Miniplayer has **no built-in tools**. Tools are an **optional feature** active only when declared in
+`~/.config/miniplayer/config.json` (or `$MINIPLAYER_CONFIG`) AND the session is interactive (`chat` or `acp`).
+In pure `run` and `classify` modes, miniplayer never exposes or sends tools to the provider.
+
+Permissions and execution policies live within each standalone tool executable; miniplayer discovers tool outlines
+via parallel `--list` calls and invokes tools directly as child processes. If no tools are configured, miniplayer
+operates with zero tools.
+
+### Function calling capability check
+
+Miniplayer respects model catalog metadata. If a model's catalog entry specifies `capabilities.supports_function_calling === false`,
+miniplayer **never** attempts to send tools to that model. If tools are configured, miniplayer prints a clear warning to stderr:
+```
+warning: Model <model_id> does not support tool calling; running without tools.
+```
+and executes the session tool-free. This allows weak local models (such as `ollama/qwen2.5:14b`) to run reliably without
+failing on unsupported tool-calling schemas.
 
 ### Configuration
 
@@ -141,7 +185,7 @@ Tool names are normalized to `[a-zA-Z0-9_-]`.
 
 Miniplayer is designed as a focused assistant and interpreter rather than a monolithic autonomous coder:
 
-1. **Level 1 — No tools (Default)**: Classifier, summarizer, direct interpreter, or conversational assistant. Safe for unprivileged execution and rapid routing.
+1. **Level 1 — No tools (Default)**: Classifier, summarizer, direct interpreter, or conversational assistant. Safe for unprivileged execution, rapid routing, and local models.
 2. **Level 2 — Read-only inspection (`lmtools`, `lmprobe`)**: Inspector, code reviewer, and test failure analyzer. Can examine filesystem state, schemas, and probe diagnostic endpoints without mutation side-effects.
 3. **Level 3 — Extended toolsets (`lmgit`, `lmgh`, `lmaws`, etc.)**: Coder's assistant, ticket updater, and operational helper.
 
@@ -174,6 +218,7 @@ Example configuration:
   "model": "deepseek/deepseek-flash",
   "requestTimeoutMs": 60000,
   "wrapUp": true,
+  "contextFiles": true,
   "compact": {
     "thresholdRatio": 0.7,
     "thresholdTokens": 100000
@@ -195,6 +240,7 @@ Example configuration:
 - `poolOrdered`: When `true`, candidates in `pool` are tried in strict order rather than shuffled.
 - `requestTimeoutMs`: Request timeout in milliseconds for one-shot commands (default 60,000 ms).
 - `wrapUp`: Boolean controlling whether REPL exit runs a durable-memory wrap-up turn (default `true`).
+- `contextFiles`: Boolean controlling whether interactive sessions (`chat`, `acp`) include `AGENTS.md` and `durable-memory/index.md` (default `true`).
 - `compact`: Object with `thresholdRatio` (float, default 0.7) and/or `thresholdTokens` (integer) to control when context compaction triggers.
 - `tools`: Array of tool command strings or `{ name, command, brief }` objects.
 - `provider`: Map of provider credentials and settings (e.g., `apiKey`, `baseURL`).
@@ -264,6 +310,23 @@ npm test
 ```
 
 Unit tests use fixtures such as `tests/fixtures/faketool.js` to simulate external tools, and do not make network calls.
+
+## Manual check with local Ollama
+
+While automated CI and test suites run hermetically without requiring external servers, a manual verification script is provided for developers testing against a real local Ollama instance (such as on WSL2):
+
+```sh
+# Defaults to http://localhost:11434 and ollama/qwen2.5:14b
+./scripts/manual-ollama-check.sh
+
+# Or with a custom host or model:
+OLLAMA_HOST=http://172.18.32.1:11434 ./scripts/manual-ollama-check.sh ollama/qwen2.5:14b
+```
+
+The script verifies:
+1. `miniplayer run -m <model> "prompt"` (pure prompt execution).
+2. `miniplayer classify -m <model> --file <response>` (JSON classification).
+3. `miniplayer run -m <model> --system-file <sys> < <input>` (caller-owned system prompt and piped input).
 
 ## License
 
