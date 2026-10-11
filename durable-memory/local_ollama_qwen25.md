@@ -1,4 +1,4 @@
-# Local Ollama + qwen2.5 — how to use from WSL (verified 2026-09-13)
+# Local Ollama + qwen2.5 — how to use from WSL (verified 2026-09-13, miniplayer 2.0 re-verified 2026-10-11)
 
 ## TL;DR — the working setup
 
@@ -69,12 +69,40 @@ primary with `deepseek/deepseek-flash` failover, 60s finite call timeout
 Daemon-host config pattern:
 `{"pool": ["ollama/qwen2.5:14b", "deepseek/deepseek-v4-flash"], "poolOrdered": true, ...}`.
 
-## miniplayer tie-in (future, not wired yet)
+## Using miniplayer 2.0 with local qwen2.5 (verified 2026-10-11, our setup as the example)
 
-Ollama is OpenAI-compatible, so miniplayer's openai-compatible fallback can route it:
-baseURL `http://172.18.32.1:11434/v1`, model `qwen2.5:14b`, apiKey any non-empty string (Ollama
-ignores it). That would add a zero-cost, no-rate-limit local model to the pool — candidate for a
-`ollama` provider entry if ever wanted.
+Our setup: Ollama runs on the Windows host, miniplayer runs in WSL2, reached through the WSL
+gateway address (a private LAN address, not a secret; yours will differ: `ip route show default`).
+No API key is involved anywhere for local Ollama; never put keys in this repo's notes or tests.
+
+```bash
+export OLLAMA_HOST=http://172.18.32.1:11434          # origin only; miniplayer appends /v1
+node bin/miniplayer.js run -m ollama/qwen2.5:14b "Say pong"             # -> Pong!
+printf '%s' "The assigned fix is complete and all tests pass; ready for the next issue." |
+  node bin/miniplayer.js classify -m ollama/qwen2.5:14b
+# -> {"label":"task-done","reason":"...","confidence":1}
+node bin/miniplayer.js run -m ollama/qwen2.5:14b --system-file sys.txt "Summarize: all deployment checks green"
+```
+
+`scripts/manual-ollama-check.sh` runs exactly these three steps and prints PASS/FAIL per step
+(honors `OLLAMA_HOST`). Result on our WSL2 box: all three PASS, and `npm test` 165/165 there too.
+The CI host cannot reach Ollama, so this check is manual: run it after pulling.
+
+Why this works with a weak model: miniplayer's core is prompt in, text out. `run` and `classify`
+send no `tools` and no extra system text, so qwen2.5 never has to emit tool-call JSON. In
+lmscript-driven use the script runs lmtools/lmprobe/builds deterministically and puts the results
+in the prompt; miniplayer only interprets (classify/decide).
+
+Gotchas seen:
+- `MINIPLAYER_CONFIG` pointing at a file that does not exist is an error (by design); use an
+  existing file (e.g. `echo '{}' > /tmp/cfg.json`) or leave the variable unset.
+- Do NOT configure `tools` for qwen2.5 and expect good tool use. lmplayer (the opencode clone) found
+  the full tool catalog too noisy for qwen2.5: wrong argument keys/types, or describing a call
+  instead of emitting it. What worked there was a single bash-only tool. In miniplayer the
+  external tool bridge is optional and needs a model with reliable native tool calling.
+- Use `localhost` only if Ollama is local to the same OS; across WSL2 -> Windows use the gateway IP.
+- Latency is ~15-25 s per short call with the 14b model; the default 60 s one-shot timeout is fine
+  for classify, raise `MINIPLAYER_REQUEST_TIMEOUT_MS` for long inputs.
 
 ## Local WSL fallback install (kept, but not the preferred path)
 
