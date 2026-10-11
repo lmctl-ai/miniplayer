@@ -50,7 +50,7 @@ test('real ACP CLI records native model and sends live multi-turn history', { ti
       usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } }));
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
-  const env = { ...process.env, MINIPLAYER_DEBUG: '1', MINIPLAYER_CONFIG: config, MINIPLAYER_HOME: home, MINIPLAYER_LMPRICE_CATALOG: catalog,
+  const env = { ...process.env, MINIPLAYER_DEBUG: '1', MINIPLAYER_CONFIG: config, MINIPLAYER_HOME: home, MINIPLAYER_CATALOG: catalog,
     OLLAMA_HOST: `http://127.0.0.1:${server.address().port}` };
   const client = connect(env);
   t.after(async () => { await client.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); rmSync(home, { recursive: true, force: true }); });

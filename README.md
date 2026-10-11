@@ -1,7 +1,7 @@
 # miniplayer
 
 `miniplayer` is a small Node 20+ CLI for one-shot language-model calls. It selects models from the
-model catalog (the schema-version-1 JSON that `lmprice` produces), routes them to a supported provider, and exits after one response.
+model catalog (schema-version-1 JSON), routes them to a supported provider, and exits after one response.
 The `run` command handles one user request, including any model/tool steps needed
 to answer it. `classify` stays tool-free. `miniplayer acp` supports live multi-turn
 conversations with native tools. Miniplayer does not stream individual tokens,
@@ -20,15 +20,15 @@ miniplayer --help
 ## Model catalog
 
 miniplayer selects models from a published catalog: schema-version-1 JSON containing a `records`
-array. The dataset is produced by the `lmprice` project (compiled from OpenRouter, LiteLLM, and
-Moonshot public data) and published at:
+array. The dataset is compiled from OpenRouter, LiteLLM, and
+Moonshot public data and published at:
 
 ```
 https://lmctl.com/dataset/model_list.json
 ```
 
 Miniplayer operates **online-first with a local cache**:
-* **Cache directory**: `(XDG_CACHE_HOME or ~/.cache)/miniplayer/lmprice` containing `model_list.json`
+* **Cache directory**: `(XDG_CACHE_HOME or ~/.cache)/miniplayer/catalog` containing `model_list.json`
   and `meta.json` (`{ etag, last_checked }`). Created with per-user permissions (`0o700` directory,
   `0o600` files).
 * **TTL**: Defaults to 6 hours. Override with `MINIPLAYER_PRICE_TTL` in seconds (`0` forces a refresh).
@@ -41,8 +41,8 @@ Miniplayer operates **online-first with a local cache**:
 * **Offline resilience**: Any network, DNS, timeout, HTTP error, malformed JSON, or failed schema
   validation falls back **silently** to the existing valid cache on disk. A failed download never corrupts
   or replaces a good cache. If no valid cache exists and no network is available, miniplayer exits with
-  an error naming the URL, the cache directory, and the `MINIPLAYER_LMPRICE_CATALOG` escape hatch.
-* **Pinned local catalog**: Set `MINIPLAYER_LMPRICE_CATALOG=/path/to/model_list.json` to pin to a
+  an error naming the URL, the cache directory, and the `MINIPLAYER_CATALOG` escape hatch.
+* **Pinned local catalog**: Set `MINIPLAYER_CATALOG=/path/to/model_list.json` to pin to a
   specific local file. Pinning disables network checks and cache lookups entirely, ensuring deterministic
   and reproducible behavior in offline and test environments.
 

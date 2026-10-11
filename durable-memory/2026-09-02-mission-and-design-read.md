@@ -10,7 +10,7 @@ Build **miniplayer**, a lightweight opencode:
 
 Sibling references:
 - ../opencode — full agent; provider abstraction to mirror (Vercel AI SDK, models.dev catalog, `provider/model` IDs).
-- ../lmprice — model catalog (dist/model_list.json, ~3936 records, OpenRouter + LiteLLM sources).
+- The model catalog (schema-version-1 JSON, ~3936 records, OpenRouter + LiteLLM sources) — published at https://lmctl.com/dataset/model_list.json.
 
 ## Key facts gathered
 
@@ -21,20 +21,20 @@ Sibling references:
 - Minimal subset for miniplayer: catalog + `provider/model` parse + AI SDK factory map + openai-compatible fallback + env-key resolution + `generateText()`. Drop: streaming, tools, sessions, OAuth, plugins, npm auto-install.
 - Key files: packages/opencode/src/provider/provider.ts, packages/core/src/models-dev.ts, packages/opencode/src/session/llm.ts.
 
-### lmprice catalog
-- dist/model_list.json ≈ 10.5 MB (fine to load whole in a CLI), schema_version 1, `records[]` with: record_id, source (openrouter|litellm), provider (TWO unreconciled vocabularies), mode, gateway_id, vendor_model_id, canonical_slug, context_window, pricing (per-token USD), capabilities (tri-state flags, null = unknown).
+### Model catalog
+- model_list.json ≈ 10.5 MB (fine to load whole in a CLI), schema_version 1, `records[]` with: record_id, source (openrouter|litellm), provider (TWO unreconciled vocabularies), mode, gateway_id, vendor_model_id, canonical_slug, context_window, pricing (per-token USD), capabilities (tri-state flags, null = unknown).
 - Chat filter: `mode === "chat"` (3098 rows), NOT capability flags. All 420 OpenRouter rows are chat, priced, uniform gateway_id → path of least resistance.
-- Lookup policy (README): exact match only on source_model_id / gateway_id / vendor_model_id / canonical_slug; no fuzzy matching.
+- Lookup policy: exact match only on source_model_id / gateway_id / vendor_model_id / canonical_slug; no fuzzy matching.
 - No lookup code shipped — miniplayer filters the JSON itself.
-- Catalog built from OpenRouter API + LiteLLM prices JSON; publishable to S3/CloudFront (`npm run publish:dataset`).
+- Catalog built from OpenRouter API + LiteLLM prices JSON; published to the public URL above.
 
 ## Design read (sent to math Lead 2026-09-02)
 
 See reply file sent via lmctl chat — summary:
-1. Enumerate/select: load lmprice model_list.json, filter mode==="chat", exact-match selection per lmprice policy; `miniplayer models` list command with provider/price/capability filters.
-2. One-shot call: Node 20+ ESM (lmprice style), Vercel AI SDK `generateText()`, small provider factory map + openai-compatible fallback, env-var keys per provider, `provider/model` IDs (opencode convention).
+1. Enumerate/select: load the catalog's model_list.json, filter mode==="chat", exact-match selection per the catalog lookup policy; `miniplayer models` list command with provider/price/capability filters.
+2. One-shot call: Node 20+ ESM (no build step), Vercel AI SDK `generateText()`, small provider factory map + openai-compatible fallback, env-var keys per provider, `provider/model` IDs (opencode convention).
 3. Mail-lane output contract: stdout = complete self-contained reply only; diagnostics to stderr; nonzero exit on failure; runner wraps mail.
-4. Open questions for math: (a) OpenRouter-first (420 uniform rows, one key) vs all-providers-direct v1; (b) catalog dependency: sibling-path read vs published snapshot fetch-with-cache; (c) reconciling lmprice provider vocab with SDK provider ids for litellm-source rows; (d) plain Node ESM vs TS.
+4. Open questions for math: (a) OpenRouter-first (420 uniform rows, one key) vs all-providers-direct v1; (b) catalog dependency: local read vs published snapshot fetch-with-cache; (c) reconciling catalog provider vocab with SDK provider ids for litellm-source rows; (d) plain Node ESM vs TS.
 
 ## Next steps
 - Await math Lead's answers to the 4 questions, then produce implementation plan and delegate to Coder (gpt-5.6-sol) / Reviewer (claude-opus-5).
@@ -45,13 +45,13 @@ Math's answers (details are Lead's calls; direction given):
 1. End state is provider-general (operator directive). v1: minimal scope but all-providers
    ARCHITECTURE — the factory map + openai-compatible fallback IS the approach; wiring OpenRouter
    first is acceptable since adding providers = map entries.
-2. v1 reads ../lmprice/dist/model_list.json directly. Published-fetch is a later enhancement.
-3. litellm provider-vocab mapping: Lead's domain; lmprice schema fields are source of truth.
+2. v1 reads a local copy of the catalog (model_list.json) directly. Published-fetch is a later enhancement.
+3. litellm provider-vocab mapping: Lead's domain; the catalog schema fields are source of truth.
 4. Language: Lead's domain.
 
 Lead's decisions for v1:
-- **Language**: plain Node 20+ ESM (matches lmprice, minimal footprint) + `ai` (Vercel AI SDK).
-- **Catalog**: sibling read of ../lmprice/dist/model_list.json, overridable via MINIPLAYER_LMPRICE_CATALOG.
+- **Language**: plain Node 20+ ESM (minimal footprint, no build step) + `ai` (Vercel AI SDK).
+- **Catalog**: local read of the catalog JSON, overridable via MINIPLAYER_CATALOG.
 - **Routing**: openrouter-source rows → OpenRouter gateway via openai-compatible
   (OPENROUTER_API_KEY, baseURL https://openrouter.ai/api/v1), model id = gateway_id.
   litellm-source rows → small static map litellm_provider→SDK factory (openai, anthropic,
@@ -110,7 +110,7 @@ terminal-held; retry task killed by restart 2026-09-13. RESEND after deepseek-de
 
 ## Operator model decision (2026-09-13)
 
-DEFAULT = `deepseek/deepseek-flash` via metered DeepSeek API (DEEPSEEK_API_KEY). NOT in lmprice
+DEFAULT = `deepseek/deepseek-flash` via metered DeepSeek API (DEEPSEEK_API_KEY). NOT in the
 catalog (0 exact matches) → Coder adding direct provider passthrough (`<routed-provider>/<model>`
 resolves without a catalog row; catalog stays source of truth for listing/metadata). deepseek-flash
 = primary built-in default; pool failover retained. Verify `echo test | miniplayer run` (needs key).

@@ -136,7 +136,7 @@ async function loadOnlineCatalog({ url, cacheDir, fetchImpl, now, ttlMs }) {
   if (!headOk && !cached.document) {
     throw new MiniplayerError(
       `Unable to load model catalog from ${url} (network failure) and no valid cache found in ${cacheDir}. ` +
-      `Set MINIPLAYER_LMPRICE_CATALOG to a local model catalog to work offline.`
+      `Set MINIPLAYER_CATALOG to a local model catalog to work offline.`
     );
   }
 
@@ -188,13 +188,14 @@ async function loadOnlineCatalog({ url, cacheDir, fetchImpl, now, ttlMs }) {
 
   throw new MiniplayerError(
     `Unable to load model catalog from ${url} and no valid cache found in ${cacheDir}. ` +
-    `Set MINIPLAYER_LMPRICE_CATALOG to a local model catalog to work offline.`
+    `Set MINIPLAYER_CATALOG to a local model catalog to work offline.`
   );
 }
 
 async function loadCatalogInternal(options = {}) {
   const env = options.env ?? process.env;
-  const filePath = options.filePath || env.MINIPLAYER_LMPRICE_CATALOG;
+  // MINIPLAYER_LMPRICE_CATALOG is the legacy name, kept working for existing setups.
+  const filePath = options.filePath || env.MINIPLAYER_CATALOG || env.MINIPLAYER_LMPRICE_CATALOG;
 
   if (filePath) {
     let contents;
@@ -202,7 +203,7 @@ async function loadCatalogInternal(options = {}) {
       contents = readFileSync(filePath, 'utf8');
     } catch (error) {
       const hint = error?.code === 'ENOENT'
-        ? ' Set MINIPLAYER_LMPRICE_CATALOG to a schema_version 1 model catalog (see "Model catalog" in the README).'
+        ? ' Set MINIPLAYER_CATALOG to a schema_version 1 model catalog (see "Model catalog" in the README).'
         : '';
       throw new MiniplayerError(`Unable to read model catalog ${filePath}: ${error.message}.${hint}`);
     }
@@ -238,7 +239,7 @@ async function loadCatalogInternal(options = {}) {
   const cacheDir = options.cacheDir || join(
     env.XDG_CACHE_HOME || join(homedir(), '.cache'),
     'miniplayer',
-    'lmprice'
+    'catalog'
   );
 
   return loadOnlineCatalog({

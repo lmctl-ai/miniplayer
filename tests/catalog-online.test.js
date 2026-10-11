@@ -358,7 +358,7 @@ test('9. no cache + offline -> clear error mentioning URL and the env var', asyn
         assert.match(error.message, /Unable to load model catalog/);
         assert.ok(error.message.includes(targetUrl), `Error message should contain URL ${targetUrl}`);
         assert.ok(error.message.includes(tempDir), `Error message should contain cacheDir ${tempDir}`);
-        assert.ok(error.message.includes('MINIPLAYER_LMPRICE_CATALOG'), 'Error message should mention MINIPLAYER_LMPRICE_CATALOG');
+        assert.ok(error.message.includes('MINIPLAYER_CATALOG'), 'Error message should mention MINIPLAYER_CATALOG');
         return true;
       },
     );
@@ -397,7 +397,7 @@ test('10. TTL=0 forces refresh', async () => {
   }
 });
 
-test('11. MINIPLAYER_LMPRICE_CATALOG disables network (assert fetch never called)', async () => {
+test('11. MINIPLAYER_CATALOG disables network (assert fetch never called)', async () => {
   const tempDir = createTempDir();
   try {
     const pinnedPath = join(tempDir, 'pinned_catalog.json');
@@ -410,7 +410,7 @@ test('11. MINIPLAYER_LMPRICE_CATALOG disables network (assert fetch never called
     });
 
     const records = await loadCatalog({
-      env: { MINIPLAYER_LMPRICE_CATALOG: pinnedPath },
+      env: { MINIPLAYER_CATALOG: pinnedPath },
       fetchImpl,
     });
 
@@ -538,7 +538,7 @@ test('15. XDG_CACHE_HOME is respected when cacheDir is not specified', async () 
     });
 
     assert.equal(records.length, 1);
-    const expectedDir = join(tempDir, 'miniplayer', 'lmprice');
+    const expectedDir = join(tempDir, 'miniplayer', 'catalog');
     assert.ok(existsSync(join(expectedDir, 'model_list.json')));
     assert.ok(existsSync(join(expectedDir, 'meta.json')));
   } finally {
@@ -659,8 +659,8 @@ test('20. memoization: default no-arg loadCatalog memoized per process, test sea
     const pinnedPath = join(tempDir, 'model_list.json');
     writeFileSync(pinnedPath, sampleCatalogJson, { mode: 0o600 });
 
-    const originalEnv = process.env.MINIPLAYER_LMPRICE_CATALOG;
-    process.env.MINIPLAYER_LMPRICE_CATALOG = pinnedPath;
+    const originalEnv = process.env.MINIPLAYER_CATALOG;
+    process.env.MINIPLAYER_CATALOG = pinnedPath;
 
     try {
       _resetCatalogMemoForTests();
@@ -678,9 +678,9 @@ test('20. memoization: default no-arg loadCatalog memoized per process, test sea
     } finally {
       _resetCatalogMemoForTests();
       if (originalEnv === undefined) {
-        delete process.env.MINIPLAYER_LMPRICE_CATALOG;
+        delete process.env.MINIPLAYER_CATALOG;
       } else {
-        process.env.MINIPLAYER_LMPRICE_CATALOG = originalEnv;
+        process.env.MINIPLAYER_CATALOG = originalEnv;
       }
     }
   } finally {
@@ -694,9 +694,9 @@ test('a failed default load is not memoized, so a later call can recover', async
   const { join } = await import('node:path');
   const { loadCatalog, _resetCatalogMemoForTests } = await import('../src/catalog.js');
   const dir = mkdtempSync(join(tmpdir(), 'miniplayer-memo-'));
-  const saved = { fetch: globalThis.fetch, xdg: process.env.XDG_CACHE_HOME, pin: process.env.MINIPLAYER_LMPRICE_CATALOG };
+  const saved = { fetch: globalThis.fetch, xdg: process.env.XDG_CACHE_HOME, pin: process.env.MINIPLAYER_CATALOG };
   try {
-    delete process.env.MINIPLAYER_LMPRICE_CATALOG;
+    delete process.env.MINIPLAYER_CATALOG;
     process.env.XDG_CACHE_HOME = dir;
     _resetCatalogMemoForTests();
     globalThis.fetch = async () => { throw new Error('offline'); };
@@ -712,7 +712,7 @@ test('a failed default load is not memoized, so a later call can recover', async
   } finally {
     globalThis.fetch = saved.fetch;
     if (saved.xdg === undefined) delete process.env.XDG_CACHE_HOME; else process.env.XDG_CACHE_HOME = saved.xdg;
-    if (saved.pin !== undefined) process.env.MINIPLAYER_LMPRICE_CATALOG = saved.pin;
+    if (saved.pin !== undefined) process.env.MINIPLAYER_CATALOG = saved.pin;
     _resetCatalogMemoForTests();
     rmSync(dir, { recursive: true, force: true });
   }

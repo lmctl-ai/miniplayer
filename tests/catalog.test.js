@@ -53,6 +53,13 @@ test('resolves aliases before exact catalog lookup', async () => {
 test('a missing catalog error says how to supply one', async () => {
   await assert.rejects(
     () => loadCatalog('/nonexistent/model_list.json'),
-    (error) => /Unable to read model catalog/.test(error.message) && /MINIPLAYER_LMPRICE_CATALOG/.test(error.message),
+    (error) => /Unable to read model catalog/.test(error.message) && /MINIPLAYER_CATALOG/.test(error.message),
   );
+});
+
+test('a catalog can be pinned via MINIPLAYER_CATALOG or its legacy alias', async () => {
+  const viaNew = await loadCatalog({ env: { MINIPLAYER_CATALOG: fixturePath } });
+  assert.equal(viaNew.length, 5);
+  const viaLegacy = await loadCatalog({ env: { MINIPLAYER_LMPRICE_CATALOG: fixturePath } });
+  assert.equal(viaLegacy.length, 5);
 });
