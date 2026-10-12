@@ -427,3 +427,17 @@ test('ACP session passes initial system prompt and triggers compaction on long s
   assert.ok(messages.some(m => typeof m.content === 'string' && m.content.startsWith('Context summary:')));
 });
 
+
+test('a zero cache-write count reported for the turn is recorded on each model response', async t => {
+  const { cwd, store, agent } = setup(t, async ({ onResult, record }) => {
+    onResult?.({ record, cacheWriteInputTokens: 0, usageConvention: 'input-includes-cache',
+      result: { response: { id: 'r1' }, usage: { inputTokens: 3, outputTokens: 2 }, steps: [{ usage: { inputTokens: 3, outputTokens: 2 }, response: { id: 'r1' } }] } });
+    return 'ok';
+  });
+  await initialize(agent);
+  const { sessionId } = await agent.handle('session/new', { cwd, mcpServers: [] });
+  await agent.handle('session/prompt', prompt(sessionId, 'x'));
+  const turn = store.load(sessionId).turns[0];
+  assert.equal(turn.cacheWriteInputTokens, 0);
+  assert.equal(turn.modelResponses[0].cacheWriteInputTokens, 0);
+});

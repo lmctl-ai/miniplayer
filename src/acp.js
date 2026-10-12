@@ -57,7 +57,8 @@ function summarizeStep(step, index, context = {}) {
     ...(metadata.usageConvention ?? context.usageConvention ? { usageConvention: metadata.usageConvention ?? context.usageConvention } : {}),
     ...(Number.isFinite(metadata.cacheWriteInputTokens) ? { cacheWriteInputTokens: metadata.cacheWriteInputTokens } :
       Number.isFinite(step?.providerMetadata?.anthropic?.cacheCreationInputTokens)
-        ? { cacheWriteInputTokens: step.providerMetadata.anthropic.cacheCreationInputTokens } : {}),
+        ? { cacheWriteInputTokens: step.providerMetadata.anthropic.cacheCreationInputTokens }
+        : context.cacheWriteInputTokens === 0 ? { cacheWriteInputTokens: 0 } : {}),
     ...(step?.response?.id ? { nativeResponseId: String(step.response.id) } : {}),
     ...(Array.isArray(step?.toolCalls) && step.toolCalls.length ? { toolCalls: step.toolCalls.map(call => {
       const native = String(call.toolCallId ?? call.id ?? `${index + 1}`);
