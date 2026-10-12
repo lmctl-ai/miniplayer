@@ -1,0 +1,4 @@
+Write a concise design document in markdown (no code, under 120 lines) for this project.
+
+REQUIREMENTS
+Create a TypeScript project: a command line note taker. Notes are plain .txt files stored in a single directory (default ./notes, overridable with NOTES_DIR). Commands: `create <name> [text]` (text from the argument or stdin), `list`, `show <name>`, `overwrite <name> [text]` (replace an existing note; error if missing), `delete <name>`. Note names are validated (letters, digits, dash, underscore only) so a name can never escape the directory. Exit code 0 on success, non-zero with a message on stderr on failure. Use only Node built-ins at runtime; tests use node:test through tsx or compiled output. State the file layout, module split, error behaviour, the test plan, and the exact build and test commands.

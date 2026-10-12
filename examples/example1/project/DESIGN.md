@@ -1,0 +1,76 @@
+# Note Taker CLI — Design
+
+## Overview
+A TypeScript command-line note taker. Notes are plain `.txt` files in one directory. Runtime uses only Node built-ins. Tests use `node:test` via `tsx`.
+
+## File Layout
+notes-cli/
+  package.json
+  tsconfig.json
+  src/
+    cli.ts
+    args.ts
+    commands.ts
+    config.ts
+    notes.ts
+    io.ts
+    errors.ts
+  test/
+    notes.test.ts
+    commands.test.ts
+    cli.test.ts
+  dist/              # tsc output
+
+## Module Split
+- `cli.ts`: binary entry; parses `process.argv`, dispatches, catches errors, writes stderr, sets exit code.
+- `args.ts`: minimal argv parser: command, name, optional text; rejects unknown commands and missing args.
+- `config.ts`: resolves notes directory: `NOTES_DIR` or `./notes`; returns absolute path.
+- `notes.ts`: name validation, path construction, file CRUD, list, ensure directory.
+- `commands.ts`: maps commands to note operations; handles stdin text acquisition.
+- `io.ts`: reads all stdin as UTF-8 when text argument is absent.
+- `errors.ts`: typed application error with message and exit code.
+
+## CLI Behaviour
+Usage: `notes <command> [name] [text]`
+
+Commands:
+- `create <name> [text]`: create new note. Text from arg or stdin. Error if note exists.
+- `list`: print note names sorted alphabetically, one per line. Missing directory => empty output, exit 0.
+- `show <name>`: print note content to stdout. Error if missing.
+- `overwrite <name> [text]`: replace existing note. Text from arg or stdin. Error if missing.
+- `delete <name>`: remove note. Error if missing.
+
+Notes are stored as `<NOTES_DIR>/<name>.txt`. `list` ignores non-`.txt` files and strips `.txt` from displayed names.
+
+## Name Validation and Safety
+A valid name matches `^[A-Za-z0-9_-]+$`. Empty, `..`, path separators, dots, spaces, and other characters are rejected. Because names cannot contain `/`, `\`, or `..`, they cannot escape `NOTES_DIR`. After validation, path is `path.join(notesDir, name + '.txt')`.
+
+## Error Behaviour
+- Success: exit 0.
+- Usage errors: exit 2; message to stderr.
+- Runtime/domain errors: exit 1; message to stderr.
+- Errors include invalid name, missing note, existing note on create, missing command/name, unknown command, filesystem failures.
+- No stack traces on expected errors; stack traces only for unexpected exceptions in development.
+
+## Configuration
+- `NOTES_DIR` env var overrides the default `./notes`.
+- Relative paths resolve against `process.cwd()`.
+- Write operations create the notes directory if needed.
+- Read/list operations treat a missing directory as empty; `show`/`delete` then report note not found.
+
+## Test Plan
+Use `node:test` and `node:assert/strict`. Each test uses a fresh temp directory via `fs.mkdtemp` and sets `NOTES_DIR`.
+
+- `notes.test.ts`: name validation accepts letters/digits/dash/underscore; rejects empty, `..`, `/`, `\`, spaces, dots, unicode. CRUD against temp dir; list ignores non-txt; missing file errors; overwrite missing errors.
+- `commands.test.ts`: command functions with injected streams/text; create existing errors; overwrite missing errors; delete missing errors; stdin text path.
+- `cli.test.ts`: spawn CLI with `NOTES_DIR`; assert stdout, stderr, exit codes. Cases: create/list/show/overwrite/delete, stdin, invalid name, unknown command, missing note. Clean up temp dirs.
+
+## Build and Test Commands
+- Install: `npm install`
+- Build: `npm run build` (`tsc -p tsconfig.json`)
+- Test: `npm test` (`tsx --test test/*.test.ts`)
+- Run CLI from source: `npx tsx src/cli.ts <command> ...`
+- Run CLI from build: `node dist/cli.js <command> ...`
+
+## Runtime Dependencies
+Runtime: Node built-ins only (`node:fs`, `node:path`, `node:process`, `node:readline`/streams). Dev: `typescript`, `tsx`, `@types/node`.
