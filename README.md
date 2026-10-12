@@ -50,6 +50,39 @@ Miniplayer operates **online-first with a local cache**:
   specific local file. Pinning disables network checks and cache lookups entirely, ensuring deterministic
   and reproducible behavior in offline and test environments.
 
+## Zero-config providers
+
+No config file is needed. Export the provider's API key and pick a model by its id:
+
+```sh
+export ANTHROPIC_API_KEY=...
+miniplayer run -m anthropic/claude-opus-5-5 "Summarize this repository"
+miniplayer providers            # every provider: sdk, base URL, key env var, key set yes/no
+miniplayer models --routed      # every routed model id, and whether its key is set
+miniplayer models --routed --provider xai --json
+```
+
+How it works: each catalog record miniplayer can call directly carries a ready-made route in its
+`miniplayer` field (`{id, provider, model, sdk, base_url, key_env}`, published by lmprice). The
+`-m` selector matches `miniplayer.id` first (for example `anthropic/claude-opus-5-5`,
+`openai/gpt-6`, `gemini/gemini-3-pro`, `together_ai/meta-llama/...`, `openrouter/<gateway id>`,
+`ollama/qwen2.5`), then the other id fields. The route alone decides the SDK
+(`anthropic`, `openai`, `google` or `openai-compatible`), the base URL and the key env var, so
+miniplayer needs no provider table of its own.
+
+- **Brand-new models**: `<provider>/<any-model>` works for any provider the catalog routes, even if
+  that exact model is not listed yet. An unknown provider fails with the list of known providers.
+- **Keys**: read from the environment variable the route names (`ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `XAI_API_KEY`, `TOGETHER_API_KEY`, ...).
+  miniplayer never stores keys and never prints them; a missing key fails with
+  `Missing API key for <provider>: export <KEY_ENV>=...`. A plaintext `provider.<name>.apiKey` in the
+  config file still works as a fallback but is discouraged.
+- **Overrides**: the config file is only needed to change a base URL
+  (`"provider": {"together_ai": {"baseURL": "https://proxy.example/v1"}}`).
+- **Ollama** is keyless; `OLLAMA_HOST` (server origin) replaces the default `http://localhost:11434/v1`.
+- **Older catalogs** (cached before the column existed, or pinned files without it) keep working
+  through the built-in table below (`source: built-in` in `miniplayer providers`).
+
 ## Interaction modes
 
 ### 1. Interactive REPL (`miniplayer` or `miniplayer chat`)
@@ -247,7 +280,9 @@ Example configuration:
 
 ### Provider credentials and environment variables
 
-Environment variables take precedence over config credentials:
+With a current catalog the route's `key_env` names the variable (see "Zero-config providers";
+`miniplayer providers` lists them). The table below is the built-in fallback for catalog records
+without a route. Environment variables take precedence over config credentials:
 
 | Route | Supported catalog provider | Environment variable |
 | --- | --- | --- |
@@ -276,11 +311,20 @@ are made available to the member, and conversation turns are processed through A
 
 ## Commands reference
 
-List chat-capable catalog models and optionally filter them:
+List chat-capable catalog models and optionally filter them (`id` is the selector to pass to `-m`;
+`--json` for machine-readable output):
 
 ```sh
 miniplayer models
 miniplayer models --source openrouter --provider deepseek --max-input-price 1
+miniplayer models --routed --provider anthropic     # id, provider, key_set (yes | no | keyless)
+```
+
+List providers with their route and whether the key env var is set right now (never its value):
+
+```sh
+miniplayer providers
+miniplayer providers --json
 ```
 
 Run one-shot prompt:

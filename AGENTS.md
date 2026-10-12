@@ -33,6 +33,20 @@ Miniplayer has no concept of skills or autonomous tool dependencies; it does not
    - Miniplayer does not restore past sessions across process restarts.
    - In live sessions exceeding compaction thresholds, a tool-free compaction turn generates `{ summary, notes }`. Older turns are folded into a summary block, the last 2 user turns remain verbatim, notes are written to `durable-memory/<timestamp>-session-notes.md`, and pointers are appended to `durable-memory/index.md`.
 
+## Provider routing (catalog routes)
+
+- A catalog record with `miniplayer: {id, provider, model, sdk, base_url, key_env}` (lmprice) is
+  routed from that field alone in `src/providers.js` (`catalogRoute`): sdk -> AI SDK factory,
+  baseURL = config `provider.<p>.baseURL` > `OLLAMA_HOST`+/v1 (ollama) > record `base_url` > SDK
+  default, apiKey = `env[key_env]` > config `provider.<p>.apiKey` (discouraged), `key_env: null` =
+  keyless. Do not add provider knowledge on this path.
+- Selectors match `miniplayer.id` first (`src/catalog.js findSelectorMatches`); `<provider>/<model>`
+  passes through for any catalog-routed provider (`createRoutedPassthroughRecord`).
+- `LITELLM_PROVIDERS` + `createPassthroughRecord` are the fallback for records without the column
+  (old caches, fixtures); their routes must stay unchanged (the existing provider tests pin them).
+- Errors name the env var to export, never a key value. `miniplayer providers` / `models --routed`
+  report key_set yes/no/keyless only.
+
 ## Running Tests
 
 All tests are hermetic and run via Node's native test runner without network or external tool dependencies:
