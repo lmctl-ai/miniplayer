@@ -55,7 +55,7 @@ test('real ACP CLI records native model and sends live multi-turn history', { ti
   const client = connect(env);
   t.after(async () => { await client.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); rmSync(home, { recursive: true, force: true }); });
   const init = await client.request('initialize', { protocolVersion: 1 });
-  assert.equal(init.agentCapabilities.loadSession, false);
+  assert.equal(init.agentCapabilities.loadSession, true);
   const { sessionId } = await client.request('session/new', { cwd: home, mcpServers: [] });
   await client.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'one' }] });
   assert.equal(calls[0].messages[0].role, 'system');
@@ -73,4 +73,11 @@ test('real ACP CLI records native model and sends live multi-turn history', { ti
   assert.deepEqual(stored.turns[0].usage, { inputTokens: 3, outputTokens: 2, totalTokens: 5 });
   assert.equal(typeof stored.turns[0].startedAt, 'string');
   assert.equal(typeof stored.turns[0].completedAt, 'string');
+  // A second process resumes the stored session: history is rebuilt from the stored turns.
+  const second = connect(env);
+  t.after(() => second.close());
+  await second.request('initialize', { protocolVersion: 1 });
+  assert.deepEqual(await second.request('session/load', { sessionId, cwd: home, mcpServers: [] }), { sessionId });
+  await second.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'three' }] });
+  assert.deepEqual(calls[2].messages.filter(m => m.role !== 'system').map(m => m.content), ['one', 'ACK', 'two', 'ACK', 'three']);
 });

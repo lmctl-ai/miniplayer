@@ -23,10 +23,10 @@ function setup(t, generate = async ({ prompt: text, onResult, record }) => {
 const initialize = agent => agent.handle('initialize', { protocolVersion: 1, clientCapabilities: {} });
 const prompt = (sessionId, text) => ({ sessionId, prompt: [{ type: 'text', text }] });
 
-test('ACP creates private metadata sessions with live context but no cold resume', async t => {
+test('ACP creates private metadata sessions with live context', async t => {
   const { cwd, store, agent, runtime } = setup(t);
   const init = await initialize(agent);
-  assert.equal(init.agentCapabilities.loadSession, false);
+  assert.equal(init.agentCapabilities.loadSession, true);
   const { sessionId } = await agent.handle('session/new', { cwd, mcpServers: [] });
   assert.equal(statSync(store.path(sessionId)).mode & 0o777, 0o600);
   assert.deepEqual(await agent.handle('session/prompt', prompt(sessionId, 'one')), { stopReason: 'end_turn' });
@@ -43,10 +43,44 @@ test('ACP creates private metadata sessions with live context but no cold resume
   assert.equal(readFileSync(store.path(sessionId), 'utf8').includes('apiKey'), false);
   await agent.handle('session/prompt', prompt(sessionId, 'two'));
   assert.equal(store.load(sessionId).turns.length, 2);
-  await assert.rejects(agent.handle('session/load', { cwd, sessionId, mcpServers: [] }), /does not support session resume/);
-  await assert.rejects(agent.handle('session/resume', { cwd, sessionId, mcpServers: [] }), /does not support session resume/);
-  const next = await (new AcpAgent({ store, runtime, send: () => {} })).handle('initialize', { protocolVersion: 1 });
-  assert.equal(next.agentCapabilities.loadSession, false);
+});
+
+test('ACP session/load resumes a stored session on a new connection with its history', async t => {
+  const seen = [];
+  const { cwd, store, runtime, agent } = setup(t, async ({ prompt: text, messages, onResult, record }) => {
+    seen.push({ text, messages });
+    onResult?.({ record, result: { usage: { inputTokens: 1, outputTokens: 1 } } });
+    return `reply:${text}`;
+  });
+  await initialize(agent);
+  const { sessionId } = await agent.handle('session/new', { cwd, mcpServers: [] });
+  await agent.handle('session/prompt', prompt(sessionId, 'remember 7'));
+
+  const updates = [];
+  const next = new AcpAgent({ store, runtime, model: 'ollama/test', send: value => updates.push(value) });
+  await initialize(next);
+  assert.deepEqual(await next.handle('session/load', { cwd, sessionId, mcpServers: [] }), { sessionId });
+  assert.deepEqual(updates.map(u => [u.params.update.sessionUpdate, u.params.update.content.text]),
+    [['user_message_chunk', 'remember 7'], ['agent_message_chunk', 'reply:remember 7']]);
+  await next.handle('session/prompt', prompt(sessionId, 'add 5'));
+  assert.deepEqual(seen.at(-1).messages, [
+    { role: 'user', content: 'remember 7' }, { role: 'assistant', content: 'reply:remember 7' },
+    { role: 'user', content: 'add 5' },
+  ]);
+  assert.equal(store.load(sessionId).turns.length, 2);
+  assert.deepEqual(await next.handle('session/resume', { cwd, sessionId, mcpServers: [] }), { sessionId });
+});
+
+test('ACP session/load refuses unknown sessions, another directory and relative cwd', async t => {
+  const { cwd, runtime, store } = setup(t);
+  const agent = new AcpAgent({ store, runtime, model: 'ollama/test', send: () => {} });
+  await initialize(agent);
+  await assert.rejects(agent.handle('session/load', { cwd, sessionId: '00000000-0000-4000-8000-000000000000', mcpServers: [] }), /does not exist/);
+  const { sessionId } = await agent.handle('session/new', { cwd, mcpServers: [] });
+  const other = mkdtempSync(join(tmpdir(), 'miniplayer-acp-other-'));
+  t.after(() => rmSync(other, { recursive: true, force: true }));
+  await assert.rejects(agent.handle('session/load', { cwd: other, sessionId, mcpServers: [] }), /belongs to/);
+  await assert.rejects(agent.handle('session/load', { cwd: 'rel', sessionId, mcpServers: [] }), /absolute/);
 });
 
 test('invalid config causes session/new to throw error naming file and field', async t => {

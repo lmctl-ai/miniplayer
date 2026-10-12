@@ -224,11 +224,13 @@ Miniplayer is designed as a focused assistant and interpreter rather than a mono
 
 Miniplayer is an interactive helper and reasoning component, not a standalone build-and-test runner. Heavy or risky workflows (such as repository-wide builds, deployments, or deterministic scripting) are driven by orchestrators like `lmscript`, which run deterministic recipes and pass outputs to miniplayer for interpretation and guidance.
 
-## Context compaction & no-resume policy
+## Session resume and context compaction
 
-Miniplayer adheres to a **no-resume** policy: it does not reload old conversation history across process
-restarts. Inside live REPL and ACP sessions, long-running conversations are managed through dynamic context
-compaction:
+ACP sessions can be resumed across process restarts (`session/load`, `session/resume`; `loadSession: true`).
+The store keeps each completed turn's text, so a resumed session rebuilds its history from those turns, in the
+same working directory only. Tool steps inside a turn are not replayed, and a compaction summary is not
+persisted. `session/load` also replays the stored turns as updates, as ACP requires. Inside live REPL and ACP
+sessions, long-running conversations are managed through dynamic context compaction:
 
 - **Compaction threshold**: Evaluated before each model request. Context token usage is estimated from
   provider usage metadata or character heuristics (`chars / 4`). If usage exceeds 70% of the model's

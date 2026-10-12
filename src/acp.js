@@ -129,6 +129,40 @@ export class AcpAgent {
       ...(finished ? { ...(event.result !== undefined ? { rawOutput: event.result } : {}) } : {}),
     } } });
   }
+  async systemPromptFor(cwd) {
+    const isMock = typeof this.model === 'string' && this.model.startsWith('mock/');
+    let config = {};
+    if (!isMock) {
+      try {
+        config = (await this.runtime.loadConfig(undefined, this.runtime.env)) ?? {};
+      } catch (err) {
+        throw invalid(err.message);
+      }
+    }
+    let systemPrompt;
+    if (this.system) {
+      systemPrompt = this.system;
+    } else if (this.systemFile) {
+      try {
+        systemPrompt = await readFile(this.systemFile, 'utf8');
+      } catch (err) {
+        throw invalid(`Unable to read system prompt file ${this.systemFile}: ${err.message}`);
+      }
+    } else {
+      const includeContextFiles = this.contextFiles !== undefined
+        ? this.contextFiles
+        : (config.contextFiles !== false);
+      systemPrompt = await buildInitialSystemPrompt({
+        cwd,
+        toolsConfig: config?.tools,
+        includeContextFiles,
+        env: this.runtime.env,
+        stderr: this.runtime.stderr ?? process.stderr,
+        warn: this.runtime.warn,
+      });
+    }
+    return systemPrompt;
+  }
   async handle(method, params = {}) {
     if (!params || typeof params !== 'object' || Array.isArray(params)) throw invalid('params must be an object');
     if (method === 'initialize') {
@@ -136,7 +170,7 @@ export class AcpAgent {
       if (!Number.isInteger(params.protocolVersion) || params.protocolVersion < 1) throw invalid('protocolVersion must be a positive integer');
       this.initialized = true;
       return { protocolVersion: 1, agentInfo: { name: 'miniplayer', version: '2.0.0' },
-        agentCapabilities: { loadSession: false, promptCapabilities: {}, sessionCapabilities: {} }, authMethods: [] };
+        agentCapabilities: { loadSession: true, promptCapabilities: {}, sessionCapabilities: {} }, authMethods: [] };
     }
     if (!this.initialized) throw new RpcError(-32000, 'initialize is required');
     if (method === 'notifications/initialized' || method === 'initialized') return;
@@ -147,41 +181,20 @@ export class AcpAgent {
     if (method === 'session/new') {
       const cwd = sessionContext(params);
       const session = this.store.create(cwd, this.model);
-      const isMock = typeof this.model === 'string' && this.model.startsWith('mock/');
-      let config = {};
-      if (!isMock) {
-        try {
-          config = (await this.runtime.loadConfig(undefined, this.runtime.env)) ?? {};
-        } catch (err) {
-          throw invalid(err.message);
-        }
-      }
-      let systemPrompt;
-      if (this.system) {
-        systemPrompt = this.system;
-      } else if (this.systemFile) {
-        try {
-          systemPrompt = await readFile(this.systemFile, 'utf8');
-        } catch (err) {
-          throw invalid(`Unable to read system prompt file ${this.systemFile}: ${err.message}`);
-        }
-      } else {
-        const includeContextFiles = this.contextFiles !== undefined
-          ? this.contextFiles
-          : (config.contextFiles !== false);
-        systemPrompt = await buildInitialSystemPrompt({
-          cwd: session.cwd,
-          toolsConfig: config?.tools,
-          includeContextFiles,
-          env: this.runtime.env,
-          stderr: this.runtime.stderr ?? process.stderr,
-          warn: this.runtime.warn,
-        });
-      }
-      this.loaded.set(session.id, { cwd: session.cwd, messages: [], systemPrompt, lastUsage: null });
+      this.loaded.set(session.id, { cwd: session.cwd, messages: [], systemPrompt: await this.systemPromptFor(session.cwd), lastUsage: null });
       return { sessionId: session.id };
     }
-    if (method === 'session/load' || method === 'session/resume') throw invalid('miniplayer does not support session resume; create a new session');
+    if (method === 'session/load' || method === 'session/resume') {
+      const cwd = sessionContext(params);
+      const session = this.store.load(params.sessionId);
+      if (session.cwd !== cwd) throw invalid(`session ${session.id} belongs to ${session.cwd}, not ${cwd}`);
+      // Native history keeps each completed turn's text; tool steps inside a turn are not replayed.
+      const done = session.turns.filter(turn => turn.status === 'complete' && typeof turn.output?.text === 'string');
+      this.loaded.set(session.id, { cwd: session.cwd, systemPrompt: await this.systemPromptFor(session.cwd), lastUsage: null,
+        messages: done.flatMap(turn => [{ role: 'user', content: turn.input.text }, { role: 'assistant', content: turn.output.text }]) });
+      if (method === 'session/load') for (const turn of done) { this.update(session.id, 'user', turn.input.text); this.update(session.id, 'assistant', turn.output.text); }
+      return { sessionId: session.id };
+    }
     if (method === 'session/prompt') return this.prompt(params);
     throw new RpcError(-32601, `Method not found: ${method}`);
   }
@@ -322,7 +335,7 @@ export class AcpAgent {
         ...(providerResult?.cacheWriteInputTokens !== undefined ? { cacheWriteInputTokens: providerResult.cacheWriteInputTokens } : {}),
         ...(toolEvents.length ? { toolEvents: toolEvents.map(summarizeToolEvent) } : {}),
         ...((stepRecords.length || result?.steps?.length) ? { modelResponses: (stepRecords.length ? stepRecords : result.steps).map((step, index) => summarizeStep(step, index, stepContext)) } : {}) };
-      // Persist metadata only. Live conversation context stays in memory and is never reloaded.
+      // Persist turn text and metadata; session/load rebuilds the conversation from completed turns.
       const latest = this.store.load(params.sessionId);
       this.store.save({ ...latest, ...(record?.provider ? { provider: record.provider } : {}), ...(model ? { model } : {}),
         updatedAt: completedAt, turns: [...latest.turns.slice(0, -1), turn] });
