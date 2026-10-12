@@ -276,7 +276,10 @@ export function findSelectorMatches(records, selector) {
   // lmprice's routed id (`miniplayer.id`, unique in the catalog) wins over the other id fields.
   const routed = records.filter((record) => record?.miniplayer?.id === selector);
   if (routed.length > 0) return routed;
-  return records.filter((record) => SELECTOR_FIELDS.some((field) => record[field] === selector));
+  // An OpenRouter row without a route (`miniplayer: null`) lost the id collision to a LiteLLM
+  // `openrouter/...` row; its bare `vendor/model` id must not capture a direct provider selector.
+  return records.filter((record) => !(record?.source === 'openrouter' && record.miniplayer === null)
+    && SELECTOR_FIELDS.some((field) => record[field] === selector));
 }
 
 export function listChatModels(records, filters = {}) {

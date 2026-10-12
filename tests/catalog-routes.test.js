@@ -284,3 +284,20 @@ test('providers lists each provider\'s route and whether its key is set', async 
     provider: 'anthropic', sdk: 'anthropic', base_url: null, key_env: 'ANTHROPIC_API_KEY', key_set: 'no', source: 'catalog',
   });
 });
+
+test('an OpenRouter row that lost the id collision does not capture a direct provider selector', () => {
+  const deepseek = { sdk: 'openai-compatible', base_url: 'https://api.deepseek.com', key_env: 'DEEPSEEK_API_KEY' };
+  const catalog = [
+    { record_id: 'litellm:deepseek/deepseek-chat', source: 'litellm', provider: 'deepseek', mode: 'chat',
+      source_model_id: 'deepseek/deepseek-chat', vendor_model_id: 'deepseek/deepseek-chat',
+      miniplayer: { id: 'deepseek/deepseek-chat', provider: 'deepseek', model: 'deepseek-chat', ...deepseek } },
+    { record_id: 'openrouter:deepseek/deepseek-v4.1-flash', source: 'openrouter', provider: 'deepseek', mode: 'chat',
+      source_model_id: 'deepseek/deepseek-v4.1-flash', vendor_model_id: null, gateway_id: null, miniplayer: null },
+  ];
+  const { record, passthrough } = resolveCallableModel(catalog, 'deepseek/deepseek-v4.1-flash');
+  assert.equal(passthrough, true);
+  assert.deepEqual(record.miniplayer, { id: 'deepseek/deepseek-v4.1-flash', provider: 'deepseek', model: 'deepseek-v4.1-flash', ...deepseek });
+  // Catalogs without the column (null/undefined) keep resolving by id fields.
+  const legacy = catalog.map(({ miniplayer, ...rest }) => rest);
+  assert.equal(resolveCallableModel(legacy, 'deepseek/deepseek-v4.1-flash').record.record_id, 'openrouter:deepseek/deepseek-v4.1-flash');
+});

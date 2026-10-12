@@ -20,6 +20,14 @@ function usageConvention(record) {
   return 'unknown';
 }
 
+// Direct APIs that bill no separate cache-write bucket (caching is automatic and writes are free).
+const NO_CACHE_WRITE_PROVIDERS = new Set(['openai', 'deepseek']);
+function cacheWriteTokens(record, providerMetadata) {
+  const native = providerMetadata?.anthropic?.cacheCreationInputTokens;
+  if (Number.isFinite(native)) return { cacheWriteInputTokens: native };
+  return record?.source === 'litellm' && NO_CACHE_WRITE_PROVIDERS.has(record.provider) ? { cacheWriteInputTokens: 0 } : {};
+}
+
 const LITELLM_PROVIDERS = {
   openai: {
     envKey: 'OPENAI_API_KEY',
@@ -338,11 +346,9 @@ export async function generateOneShot({
         throw new MiniplayerError('Tool-call step limit reached before the model produced a final answer');
       }
     }
-    const nativeUsage = result.providerMetadata?.anthropic;
     onResult?.({ result, record, usageConvention: usageConvention(record),
       ...(Array.isArray(result.response?.messages) ? { messages: result.response.messages } : {}),
-      ...(Number.isFinite(nativeUsage?.cacheCreationInputTokens)
-        ? { cacheWriteInputTokens: nativeUsage.cacheCreationInputTokens } : {}) });
+      ...cacheWriteTokens(record, result.providerMetadata) });
     // Explicit cancellation is never a successful result, even if a backend ignored it.
     signal?.throwIfAborted();
     return result.text;

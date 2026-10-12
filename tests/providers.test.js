@@ -163,3 +163,16 @@ test('OpenRouter Anthropic rows use the compatible input convention', async () =
   });
   assert.equal(metadata.usageConvention, 'input-includes-cache');
 });
+
+test('direct OpenAI and DeepSeek calls report zero cache writes; routed or unknown ones stay unreported', async () => {
+  const run = async (record, env) => {
+    let metadata;
+    await generateOneShot({ record, config: {}, env: { ...env, MINIPLAYER_REQUEST_TIMEOUT_MS: '1000' }, prompt: 'hello',
+      generateText: async () => ({ text: 'ok', usage: { inputTokens: 2 } }), onResult: value => { metadata = value; } });
+    return metadata.cacheWriteInputTokens;
+  };
+  assert.equal(await run({ record_id: 'litellm:deepseek/deepseek-flash', source: 'litellm', provider: 'deepseek', vendor_model_id: 'deepseek/deepseek-flash' }, { DEEPSEEK_API_KEY: 'k' }), 0);
+  assert.equal(await run({ record_id: 'litellm:gpt-6', source: 'litellm', provider: 'openai', vendor_model_id: 'gpt-6' }, { OPENAI_API_KEY: 'k' }), 0);
+  assert.equal(await run({ record_id: 'litellm:anthropic/m', source: 'litellm', provider: 'anthropic', vendor_model_id: 'm' }, { ANTHROPIC_API_KEY: 'k' }), undefined);
+  assert.equal(await run({ record_id: 'openrouter:openai/gpt-6', source: 'openrouter', provider: 'openai', gateway_id: 'openai/gpt-6' }, { OPENROUTER_API_KEY: 'k' }), undefined);
+});
