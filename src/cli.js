@@ -11,6 +11,8 @@ import { generateMock, isMockRecord, mockRecord } from './mock.js';
 import { generateFromSelection } from './pool.js';
 import { buildInitialSystemPrompt } from './prompt-builder.js';
 import { compactSessionContext } from './compaction.js';
+import { randomUUID } from 'node:crypto';
+import { SessionStore, sessionHome, historyMessages } from './session-store.js';
 
 export const WRAP_UP_PROMPT =
   "Before exiting: if this session produced durable knowledge (decisions, conventions, pitfalls, state of work), update durable-memory/ (add or edit a note file and keep durable-memory/index.md as a one-line-per-note table of contents; update AGENTS.md only if a standing instruction changed). If nothing durable, reply 'nothing to update'.";
@@ -18,7 +20,7 @@ export const WRAP_UP_PROMPT =
 export const HELP = `Usage:
   miniplayer [chat] [-m|--model <selector>] [--wrapup|--no-wrapup]
   miniplayer acp [-m|--model <selector>]
-  miniplayer run [-m|--model <selector>] [--wrapup|--no-wrapup] [prompt]
+  miniplayer run [-m|--model <selector>] [--wrapup|--no-wrapup] [--session new|<id>] [--json] [prompt]
   miniplayer classify -m <selector> [--file <path>]
   miniplayer models [--routed] [--source openrouter|litellm] [--provider <name>] [--max-input-price <number>] [--json]
   miniplayer providers [--json]
@@ -54,6 +56,8 @@ function parseRunArgs(args) {
   let system;
   let systemFile;
   let compact = false;
+  let session;
+  let json = false;
   const prompt = [];
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -72,6 +76,11 @@ function parseRunArgs(args) {
     } else if (arg === '--system-file') {
       systemFile = takeOption(args, index, arg);
       index += 1;
+    } else if (arg === '--session') {
+      session = takeOption(args, index, arg);
+      index += 1;
+    } else if (arg === '--json') {
+      json = true;
     } else if (arg === '--compact') {
       compact = true;
     } else if (arg === '--wrapup') {
@@ -84,7 +93,7 @@ function parseRunArgs(args) {
       prompt.push(arg);
     }
   }
-  return { model, wrapUp, file, system, systemFile, compact, prompt: prompt.join(' ') };
+  return { model, wrapUp, file, system, systemFile, compact, session, json, prompt: prompt.join(' ') };
 }
 
 function parseChatArgs(args) {
@@ -220,7 +229,9 @@ async function runCommand(args, io, runtime, preloadedPrompt) {
     rawPrompt = options.prompt || preloadedPrompt || await readStdin(io.stdin);
   }
   const prompt = requireText(rawPrompt, 'Prompt');
+  if (options.json && !options.session) throw new MiniplayerError('--json requires --session');
   const mock = mockRecord(options.model);
+  if (options.session && mock) throw new MiniplayerError('--session does not support mock models');
   if (typeof options.model === 'string' && options.model.startsWith('mock/') && !mock) {
     throw new MiniplayerError(`Unknown mock model "${options.model.slice('mock/'.length)}"`);
   }
@@ -255,21 +266,52 @@ async function runCommand(args, io, runtime, preloadedPrompt) {
 
   const records = await runtime.loadCatalog();
 
-  const text = await generateFromSelection({
-    explicitSelector: options.model,
-    config,
-    records,
-    prompt,
-    system: systemPrompt,
-    tools: {}, // pure run: NO tools
-    env: runtime.env,
-    random: runtime.random,
-    generate: runtime.generate,
-    debug: runtime.debug,
-    warn: runtime.warn,
-    cwd: process.cwd(),
-  });
-  io.stdout.write(text);
+  let stored;
+  if (options.session) {
+    const store = new SessionStore(sessionHome(runtime.env));
+    const session = options.session === 'new' ? store.create(process.cwd(), options.model) : store.load(options.session);
+    if (session.cwd !== process.cwd()) throw new MiniplayerError(`session ${session.id} belongs to ${session.cwd}, not ${process.cwd()}`);
+    stored = { store, session, release: store.lock(session.id) };
+  }
+  let providerResult;
+  let text;
+  try {
+    const startedAt = new Date().toISOString();
+    text = await generateFromSelection({
+      explicitSelector: options.model,
+      config,
+      records,
+      prompt,
+      ...(stored ? { messages: [...historyMessages(stored.session), { role: 'user', content: prompt }] } : {}),
+      system: systemPrompt,
+      tools: {}, // pure run: NO tools
+      env: runtime.env,
+      random: runtime.random,
+      generate: runtime.generate,
+      debug: runtime.debug,
+      warn: runtime.warn,
+      cwd: process.cwd(),
+      onResult: value => { providerResult = value; },
+    });
+    if (stored) {
+      const record = providerResult?.record;
+      const result = providerResult?.result;
+      const model = result?.response?.modelId ?? record?.vendor_model_id ?? record?.gateway_id ?? record?.source_model_id ?? options.model;
+      const usage = result?.totalUsage ?? result?.usage;
+      const nativeResponseId = result?.response?.id ?? result?.response?.requestId;
+      const turn = { responseId: randomUUID(), startedAt, completedAt: new Date().toISOString(), status: 'complete',
+        input: { text: prompt }, output: { text },
+        ...(nativeResponseId ? { nativeResponseId: String(nativeResponseId) } : {}),
+        ...(record?.provider ? { provider: record.provider } : {}), ...(model ? { model } : {}), ...(usage ? { usage } : {}),
+        ...(providerResult?.usageConvention ? { usageConvention: providerResult.usageConvention } : {}),
+        ...(providerResult?.cacheWriteInputTokens !== undefined ? { cacheWriteInputTokens: providerResult.cacheWriteInputTokens } : {}) };
+      stored.store.save({ ...stored.session, ...(record?.provider ? { provider: record.provider } : {}), ...(model ? { model } : {}),
+        updatedAt: turn.completedAt, turns: [...stored.session.turns, turn] });
+    }
+  } finally { stored?.release(); }
+  if (options.json) io.stdout.write(`${JSON.stringify({ sessionId: stored.session.id, text })}\n`);
+  else io.stdout.write(text);
+  if (stored && !options.json) io.stderr.write(`session: ${stored.session.id}\n`);
 
   if (shouldWrapUp) {
     try {

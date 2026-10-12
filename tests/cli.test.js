@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -161,3 +164,42 @@ test('invalid config in run command fails with exit 1 and prints error', async (
   assert.ok(io.output().stderr.includes('Config bad.json field "tools" must be an array'));
 });
 
+
+test('run --session new|<id> continues one conversation across separate one-shot commands', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'miniplayer-run-session-'));
+  const records = await loadCatalog(catalogPath);
+  const seen = [];
+  const dependencies = {
+    loadConfig: async () => ({}), loadCatalog: async () => records,
+    env: { OPENROUTER_API_KEY: 'key', MINIPLAYER_HOME: home },
+    generate: async ({ prompt, messages }) => {
+      seen.push(messages);
+      const numbers = (messages ?? [{ role: 'user', content: prompt }]).filter(m => m.role === 'user').map(m => Number(m.content));
+      return String(numbers.reduce((a, b) => a + b, 0));
+    },
+  };
+  try {
+    const first = memoryIo();
+    assert.equal(await main(['run', '-m', 'vendor/fast', '--session', 'new', '--json', '7'], first, dependencies), 0);
+    const { sessionId, text } = JSON.parse(first.output().stdout);
+    assert.equal(text, '7');
+    assert.match(sessionId, /^[a-f0-9-]{36}$/);
+
+    const second = memoryIo();
+    assert.equal(await main(['run', '-m', 'vendor/fast', '--session', sessionId, '--json', '5'], second, dependencies), 0);
+    assert.deepEqual(JSON.parse(second.output().stdout), { sessionId, text: '12' });
+    assert.deepEqual(seen.at(-1), [{ role: 'user', content: '7' }, { role: 'assistant', content: '7' }, { role: 'user', content: '5' }]);
+
+    const plain = memoryIo();
+    assert.equal(await main(['run', '-m', 'vendor/fast', '--session', sessionId, '1'], plain, dependencies), 0);
+    assert.equal(plain.output().stdout, '13');
+    assert.equal(plain.output().stderr, `session: ${sessionId}\n`);
+
+    const missing = memoryIo();
+    assert.equal(await main(['run', '-m', 'vendor/fast', '--session', '00000000-0000-4000-8000-000000000000', '1'], missing, dependencies), 1);
+    assert.match(missing.output().stderr, /does not exist/);
+    const stateless = memoryIo();
+    assert.equal(await main(['run', '-m', 'vendor/fast', '--json', '3'], stateless, dependencies), 1);
+    assert.match(stateless.output().stderr, /--json requires --session/);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});

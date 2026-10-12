@@ -226,6 +226,9 @@ Miniplayer is an interactive helper and reasoning component, not a standalone bu
 
 ## Session resume and context compaction
 
+One-shot runs can resume too: `miniplayer run --session new --json "..."` returns a session id and
+`miniplayer run --session <id> "..."` continues it (see `examples/example2`).
+
 ACP sessions can be resumed across process restarts (`session/load`, `session/resume`; `loadSession: true`).
 The store keeps each completed turn's text, so a resumed session rebuilds its history from those turns, in the
 same working directory only. Tool steps inside a turn are not replayed, and a compaction summary is not

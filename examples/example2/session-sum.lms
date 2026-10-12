@@ -1,0 +1,23 @@
+// access: read (calls miniplayer; writes only miniplayer's own session store)
+// What it does: shows a resumed miniplayer session with one-shot commands. Each `miniplayer run` is a
+// separate process; `--session` carries the conversation from one call to the next.
+// How to run: lmscript session-sum.lms <model>      e.g. deepseek/deepseek-v4.1-flash
+
+MODEL = ARGV[0];
+
+fn ask(session, text) {
+  r = system(["miniplayer", "run", "-m", MODEL, "--session", session, "--json", text]);
+  if (r.code != 0) {
+    println("miniplayer failed:", trim(r.stderr));
+    exit(1);
+  }
+  return json_parse(r.stdout);
+}
+
+first = ask("new", "Remember the number 7. Reply with just OK.");
+println("1:", trim(first.text));
+second = ask(first.sessionId, "Remember another number: 5. Reply with just OK.");
+println("2:", trim(second.text));
+third = ask(second.sessionId, "What is the total of the two numbers I gave you? Reply with just the number.");
+println("3:", trim(third.text));
+println(first.sessionId == third.sessionId ? "same session" : "different sessions");

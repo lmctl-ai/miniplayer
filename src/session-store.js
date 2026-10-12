@@ -63,3 +63,9 @@ export class SessionStore {
     return () => { if (!released) { released = true; rmSync(path, { force: true }); } };
   }
 }
+
+/** Conversation messages rebuilt from completed turns (tool steps inside a turn are not kept). */
+export function historyMessages(session) {
+  return session.turns.filter(turn => turn.status === 'complete' && typeof turn.output?.text === 'string')
+    .flatMap(turn => [{ role: 'user', content: turn.input.text }, { role: 'assistant', content: turn.output.text }]);
+}

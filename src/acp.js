@@ -4,7 +4,7 @@ import { statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { generateFromSelection } from './pool.js';
-import { SessionStore, sessionHome } from './session-store.js';
+import { SessionStore, sessionHome, historyMessages } from './session-store.js';
 import { generateMock, isMockRecord, mockRecord } from './mock.js';
 import { buildInitialSystemPrompt } from './prompt-builder.js';
 import { compactSessionContext } from './compaction.js';
@@ -191,7 +191,7 @@ export class AcpAgent {
       // Native history keeps each completed turn's text; tool steps inside a turn are not replayed.
       const done = session.turns.filter(turn => turn.status === 'complete' && typeof turn.output?.text === 'string');
       this.loaded.set(session.id, { cwd: session.cwd, systemPrompt: await this.systemPromptFor(session.cwd), lastUsage: null,
-        messages: done.flatMap(turn => [{ role: 'user', content: turn.input.text }, { role: 'assistant', content: turn.output.text }]) });
+        messages: historyMessages(session) });
       if (method === 'session/load') for (const turn of done) { this.update(session.id, 'user', turn.input.text); this.update(session.id, 'assistant', turn.output.text); }
       return { sessionId: session.id };
     }
