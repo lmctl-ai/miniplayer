@@ -1,7 +1,7 @@
 // access: read (calls miniplayer; writes only miniplayer's own session store)
 // What it does: shows a resumed miniplayer session with one-shot commands. Each `miniplayer run` is a
 // separate process; `--session` carries the conversation from one call to the next.
-// How to run: lmscript session-sum.lms <model>      e.g. deepseek/deepseek-v4.1-flash
+// How to run: lmscript session-sum.lms <model>      e.g. deepseek/deepseek-flash
 
 MODEL = ARGV[0];
 

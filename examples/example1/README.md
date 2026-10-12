@@ -8,7 +8,7 @@
 
 ```bash
 export DEEPSEEK_API_KEY=...        # zero-config provider, see "Zero-config providers" in the main README
-lmscript notes-project.lms deepseek/deepseek-v4.1-flash /tmp/notes-demo 5
+lmscript notes-project.lms deepseek/deepseek-flash /tmp/notes-demo 5
 ```
 
 miniplayer runs as a **managed lmctl provider** (`lm_agent({provider: "miniplayer", model: ...}, prompt)`, the same path as `lmctl prompt --provider miniplayer`), so `lmctl ls` and `lmctl cost` see every call. `miniplayer` must be on PATH. No timeouts are set in the script.
@@ -26,6 +26,6 @@ Creating the git repository is left to the caller. Every call is independent: th
 
 ## The run checked in here (deepseek/deepseek-v4.1-flash, 2026-10-12)
 
-Design -> implementation (9 files) -> round 0 failed -> one fix round rewrote 1 file -> build and 39 tests pass. Checked by hand afterwards: all five commands work, a name like `../x` is rejected, `create` works when the notes directory does not exist yet.
+Design -> implementation (9 files) -> round 0 failed -> one fix round rewrote 1 file -> build and 39 tests pass. Checked by hand afterwards: all five commands work, a name like `../x` is rejected, `create` works when the notes directory does not exist yet. This checked-in run used the OpenRouter-routed name before routing was fixed and has not been re-run with `deepseek/deepseek-flash`.
 
 Runs differ, because the brain is a model. Earlier runs of the same flow once needed no fix round and once produced a `create` that failed on a missing notes directory (the design never said to create it): passing tests only prove what the design asked for.

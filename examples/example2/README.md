@@ -6,7 +6,7 @@ rebuilt from the stored turns (same working directory only).
 
 `session-sum.lms` gives a number, resumes with another, then asks for the total:
 
-    lmscript session-sum.lms deepseek/deepseek-v4.1-flash
+    lmscript session-sum.lms deepseek/deepseek-flash
 
 Output of a real run:
 
