@@ -77,6 +77,113 @@ const LITELLM_PROVIDERS = {
   },
 };
 
+// ---- catalog routes (lmprice's `miniplayer` column) --------------------------------------------
+// A record carrying `miniplayer: {id, provider, model, sdk, base_url, key_env}` is routed from that
+// field alone: no provider knowledge is hardcoded on this path. LITELLM_PROVIDERS above stays the
+// fallback for records without the column (older cached catalogs, offline fixtures).
+
+const SDK_FACTORIES = {
+  anthropic: createAnthropic,
+  openai: createOpenAI,
+  google: createGoogleGenerativeAI,
+};
+const PASSTHROUGH_ROUTED_MODEL = /^\S+$/;
+
+function catalogRoute(record, config, env) {
+  const route = record.miniplayer;
+  const label = route.id ?? record.record_id;
+  if (route.sdk !== 'openai-compatible' && !SDK_FACTORIES[route.sdk]) {
+    throw new MiniplayerError(`Unsupported sdk "${route.sdk}" for model "${label}"`);
+  }
+  if (typeof route.model !== 'string' || route.model.length === 0) {
+    throw new MiniplayerError(`Catalog route for "${label}" has no model`);
+  }
+  const settings = providerConfig(config, route.provider);
+  // ollama: OLLAMA_HOST (host + /v1) replaces the catalog's default local address.
+  const hostOverride = route.provider === 'ollama' && env.OLLAMA_HOST
+    ? `${env.OLLAMA_HOST.replace(/\/+$/, '')}/v1`
+    : undefined;
+  const keyless = route.key_env === null || route.key_env === undefined;
+  return {
+    kind: route.sdk === 'openai-compatible' ? 'openai-compatible' : 'native',
+    ...(route.sdk === 'openai-compatible' ? {} : { create: SDK_FACTORIES[route.sdk] }),
+    name: route.provider,
+    baseURL: settings.baseURL || hostOverride || route.base_url || undefined,
+    apiKey: keyless ? undefined : env[route.key_env] || settings.apiKey,
+    envKey: keyless ? undefined : route.key_env,
+    requiresApiKey: !keyless,
+    modelId: route.model,
+  };
+}
+
+function fallbackSdk(mapping) {
+  if (mapping.kind === 'openai-compatible') return 'openai-compatible';
+  if (mapping.create === createAnthropic) return 'anthropic';
+  if (mapping.create === createGoogleGenerativeAI) return 'google';
+  return 'openai';
+}
+
+/**
+ * One route per provider: from the catalog's `miniplayer` routes, plus the built-in fallback table
+ * (passthrough providers and openrouter) for providers the catalog does not route.
+ */
+export function knownProviderRoutes(records = []) {
+  const routes = new Map();
+  for (const record of records) {
+    const route = record?.miniplayer;
+    if (!route?.provider || routes.has(route.provider)) continue;
+    routes.set(route.provider, {
+      provider: route.provider,
+      sdk: route.sdk,
+      base_url: route.base_url ?? null,
+      key_env: route.key_env ?? null,
+      source: 'catalog',
+    });
+  }
+  const builtIn = [
+    ['openrouter', { sdk: 'openai-compatible', base_url: OPENROUTER_BASE_URL, key_env: 'OPENROUTER_API_KEY' }],
+    ...Object.entries(LITELLM_PROVIDERS)
+      .filter(([, mapping]) => mapping.passthrough)
+      .map(([name, mapping]) => [name, {
+        sdk: fallbackSdk(mapping),
+        base_url: typeof mapping.baseURL === 'function' ? mapping.baseURL({}) : mapping.baseURL ?? null,
+        key_env: mapping.envKey ?? null,
+      }]),
+  ];
+  for (const [name, route] of builtIn) {
+    if (!routes.has(name)) routes.set(name, { provider: name, ...route, source: 'built-in' });
+  }
+  return routes;
+}
+
+/** `<provider>/<any-model>` for a provider the catalog routes (even a model it does not list). */
+export function createRoutedPassthroughRecord(selector, records = []) {
+  const separator = selector.indexOf('/');
+  if (separator <= 0 || separator === selector.length - 1) return null;
+  const provider = selector.slice(0, separator);
+  const model = selector.slice(separator + 1);
+  const route = knownProviderRoutes(records).get(provider);
+  if (!route || route.source !== 'catalog' || !PASSTHROUGH_ROUTED_MODEL.test(model)) return null;
+  return {
+    record_id: `direct:${selector}`,
+    source: provider === 'openrouter' ? 'openrouter' : 'litellm',
+    provider,
+    mode: 'chat',
+    gateway_id: null,
+    vendor_model_id: model,
+    source_model_id: selector,
+    canonical_slug: null,
+    miniplayer: {
+      id: selector,
+      provider,
+      model,
+      sdk: route.sdk,
+      base_url: route.base_url,
+      key_env: route.key_env,
+    },
+  };
+}
+
 export function createPassthroughRecord(selector) {
   const separator = selector.indexOf('/');
   if (separator <= 0 || separator === selector.length - 1) return null;
@@ -109,6 +216,8 @@ function litellmVendorModelId(record) {
 }
 
 export function resolveProviderRoute(record, config = {}, env = process.env) {
+  if (record.miniplayer) return catalogRoute(record, config, env);
+
   if (record.source === 'openrouter') {
     const settings = providerConfig(config, 'openrouter');
     if (!record.gateway_id) {
@@ -151,20 +260,21 @@ export function hasProviderCredential(record, config = {}, env = process.env) {
 
 export function createModel(record, config = {}, env = process.env) {
   const route = resolveProviderRoute(record, config, env);
-  if (!route.apiKey) {
-    throw new MiniplayerError(`Missing API key for provider "${route.name}"; set ${route.envKey} or configure provider.${route.name}.apiKey`);
+  if (route.requiresApiKey !== false && !route.apiKey) {
+    // The env var to export, never a key value; the config key is a discouraged fallback.
+    throw new MiniplayerError(`Missing API key for ${route.name}: export ${route.envKey}=... (or set provider.${route.name}.apiKey in the config; discouraged)`);
   }
 
   if (route.kind === 'openai-compatible') {
     const provider = createOpenAICompatible({
       name: route.name,
       baseURL: route.baseURL,
-      apiKey: route.apiKey,
+      ...(route.apiKey ? { apiKey: route.apiKey } : {}),
     });
     return provider(route.modelId);
   }
 
-  const options = { apiKey: route.apiKey };
+  const options = route.apiKey ? { apiKey: route.apiKey } : {};
   if (route.baseURL) options.baseURL = route.baseURL;
   return route.create(options)(route.modelId);
 }

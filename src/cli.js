@@ -6,7 +6,7 @@ import { loadCatalog, listChatModels, modelListId } from './catalog.js';
 import { buildClassificationPrompt, parseClassificationOutput } from './classifier.js';
 import { loadConfig } from './config.js';
 import { MiniplayerError } from './errors.js';
-import { generateOneShot } from './providers.js';
+import { generateOneShot, knownProviderRoutes } from './providers.js';
 import { generateMock, isMockRecord, mockRecord } from './mock.js';
 import { generateFromSelection } from './pool.js';
 import { buildInitialSystemPrompt } from './prompt-builder.js';
@@ -20,10 +20,12 @@ export const HELP = `Usage:
   miniplayer acp [-m|--model <selector>]
   miniplayer run [-m|--model <selector>] [--wrapup|--no-wrapup] [prompt]
   miniplayer classify -m <selector> [--file <path>]
-  miniplayer models [--source openrouter|litellm] [--provider <name>] [--max-input-price <number>]
+  miniplayer models [--routed] [--source openrouter|litellm] [--provider <name>] [--max-input-price <number>] [--json]
+  miniplayer providers [--json]
   miniplayer --help
 
 Prompts and classification input default to stdin. Without -m, a configured or built-in pool is used.
+Zero config: export the provider's key (miniplayer providers shows which) and run -m <provider>/<model>.
 Tools are configured via ~/.config/miniplayer/config.json ("tools" array).
 `;
 
@@ -130,6 +132,10 @@ function parseModelsArgs(args) {
     } else if (arg === '--provider') {
       filters.provider = takeOption(args, index, arg);
       index += 1;
+    } else if (arg === '--routed') {
+      filters.routed = true;
+    } else if (arg === '--json') {
+      filters.json = true;
     } else if (arg === '--max-input-price') {
       const raw = takeOption(args, index, arg);
       filters.maxInputPrice = Number(raw);
@@ -191,7 +197,7 @@ export function formatModelTable(records) {
   const rows = [['id', 'provider', 'context_total', 'input_per_1m', 'output_per_1m']];
   for (const record of records) {
     rows.push([
-      modelListId(record),
+      record.miniplayer?.id ?? modelListId(record),
       record.provider,
       record.context_window?.total_tokens,
       record.pricing?.input_per_1m_tokens,
@@ -550,10 +556,72 @@ async function chatCommand(args, io, runtime) {
   return 0;
 }
 
+/** Whether a key env var is set right now: yes / no, or keyless. Never the value. */
+function keyState(keyEnv, env) {
+  if (keyEnv === null || keyEnv === undefined) return 'keyless';
+  return env[keyEnv] ? 'yes' : 'no';
+}
+
+function byText(key) {
+  return (a, b) => (a[key] < b[key] ? -1 : a[key] > b[key] ? 1 : 0);
+}
+
 async function modelsCommand(args, io, runtime) {
   const filters = parseModelsArgs(args);
   const records = await runtime.loadCatalog();
-  io.stdout.write(formatModelTable(listChatModels(records, filters)));
+  if (filters.routed) {
+    const routes = records
+      .filter((record) => record.miniplayer?.id && record.mode === 'chat')
+      .map((record) => ({ ...record.miniplayer, key_set: keyState(record.miniplayer.key_env, runtime.env) }))
+      .filter((route) => !filters.provider || route.provider === filters.provider)
+      .sort(byText('id'));
+    if (filters.json) {
+      io.stdout.write(`${JSON.stringify(routes)}\n`);
+    } else {
+      const lines = ['id\tprovider\tkey_set', ...routes.map((r) => `${r.id}\t${r.provider}\t${r.key_set}`)];
+      io.stdout.write(`${lines.join('\n')}\n`);
+    }
+    return 0;
+  }
+  const models = listChatModels(records, filters);
+  if (filters.json) {
+    io.stdout.write(`${JSON.stringify(models.map((record) => ({
+      id: record.miniplayer?.id ?? modelListId(record),
+      provider: record.provider,
+      context_total: record.context_window?.total_tokens ?? null,
+      input_per_1m: record.pricing?.input_per_1m_tokens ?? null,
+      output_per_1m: record.pricing?.output_per_1m_tokens ?? null,
+    })))}\n`);
+    return 0;
+  }
+  io.stdout.write(formatModelTable(models));
+  return 0;
+}
+
+async function providersCommand(args, io, runtime) {
+  let json = false;
+  for (const arg of args) {
+    if (arg === '--json') json = true;
+    else throw new MiniplayerError(`Unknown option for providers: ${arg}`);
+  }
+  // Without a catalog (offline, no cache) the built-in table still answers.
+  let records = [];
+  try {
+    records = await runtime.loadCatalog();
+  } catch (error) {
+    runtime.warn(`catalog unavailable (${error.message}); showing built-in providers only`);
+  }
+  const providers = [...knownProviderRoutes(records).values()]
+    .map((route) => ({ ...route, key_set: keyState(route.key_env, runtime.env) }))
+    .sort(byText('provider'));
+  if (json) {
+    io.stdout.write(`${JSON.stringify(providers.map(({ provider, sdk, base_url, key_env, key_set, source }) => (
+      { provider, sdk, base_url, key_env, key_set, source })))}\n`);
+    return 0;
+  }
+  const lines = ['provider\tsdk\tbase_url\tkey_env\tkey_set\tsource', ...providers.map((p) =>
+    [p.provider, p.sdk, p.base_url ?? '-', p.key_env ?? '-', p.key_set, p.source].join('\t'))];
+  io.stdout.write(`${lines.join('\n')}\n`);
   return 0;
 }
 
@@ -638,6 +706,7 @@ export async function execute(args, io, dependencies = {}) {
   if (command === 'acp') return serveAcp(commandArgs, io, runtime);
   if (command === 'run') return runCommand(commandArgs, io, runtime);
   if (command === 'models') return modelsCommand(commandArgs, io, runtime);
+  if (command === 'providers') return providersCommand(commandArgs, io, runtime);
   if (command === 'classify') return classifyCommand(commandArgs, io, runtime);
   throw new MiniplayerError(`Unknown command: ${command}`);
 }

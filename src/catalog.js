@@ -273,6 +273,9 @@ export function loadCatalog(options) {
 }
 
 export function findSelectorMatches(records, selector) {
+  // lmprice's routed id (`miniplayer.id`, unique in the catalog) wins over the other id fields.
+  const routed = records.filter((record) => record?.miniplayer?.id === selector);
+  if (routed.length > 0) return routed;
   return records.filter((record) => SELECTOR_FIELDS.some((field) => record[field] === selector));
 }
 
