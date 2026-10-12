@@ -5,13 +5,12 @@
 //   1. ask miniplayer for a design document      2. ask a second, fresh miniplayer call to implement it
 //   3. the script writes the files, runs build_command / test_command from the reply's last paragraph
 //   4. on failure the error output goes back to miniplayer to fix; loop; stop when build and tests pass
-// How to run: lmscript examples/notes-project.lms <model> [project-dir] [max-fix-rounds]
-//   MINIPLAYER (env) overrides the miniplayer command, default: miniplayer
-//   MINIPLAYER_REQUEST_TIMEOUT_MS defaults to 600000 here (code generation replies are long)
-// Safety: the build/test commands are written by a model and executed with `sh -c` inside the project
-//   directory. Point it at a scratch directory. (Creating a git repo is left to the caller.)
+// How to run: lmscript notes-project.lms <model> [project-dir] [max-fix-rounds]
+//   miniplayer runs as a managed lmctl provider (lm_agent), so `lmctl ls` and `lmctl cost` see every call.
+//   No timeouts are set here: lmctl's own limits apply.
+// Safety: the build/test commands are written by a model. They run as argv (split_command, shell:false)
+//   inside the project directory; shell syntax in them is refused. Point it at a scratch directory.
 
-MP = getenv("MINIPLAYER", "miniplayer");
 if (len(ARGV) < 1) {
   println("usage: lmscript notes-project.lms <model> [project-dir] [max-fix-rounds]");
   exit(1);
@@ -21,156 +20,98 @@ DIR = len(ARGV) > 1 ? ARGV[1] : "/tmp/notes-project";
 MAX_ROUNDS = len(ARGV) > 2 ? num(ARGV[2]) : 5;
 WORK = path_join(DIR, ".mp");
 
-mkdir(DIR);
-mkdir(WORK);
-
 FORMAT_RULES = "Output format for source files: for every file write a line `=== FILE: relative/path ===` followed by the complete file content, and finish each file with a line `=== END ===`. Use relative paths only. Do not add markdown fences around file content. Always send complete files, never diffs or fragments.";
-TAIL_RULES = "The LAST paragraph of your reply must contain exactly these two lines and nothing else, each on its own line:\nbuild_command: <one shell command that compiles/type-checks the project>\ntest_command: <one shell command that runs the tests and exits non-zero on failure>";
+TAIL_RULES = """The LAST paragraph of your reply must contain exactly these two lines and nothing else, each on its own line:
+build_command: <one command that compiles/type-checks the project; no shell operators>
+test_command: <one command that runs the tests and exits non-zero on failure; no shell operators>""";
 
-// One stateless miniplayer call. Prompt goes through a file, answer comes back as text.
+// One stateless miniplayer call (a fresh member map each time: no session); prompt and answer are kept in .mp.
 fn ask(name, prompt) {
-  pfile = path_join(WORK, name + ".prompt.txt");
-  write_file(pfile, prompt);
-  r = system(["sh", "-c", "MINIPLAYER_REQUEST_TIMEOUT_MS=${MINIPLAYER_REQUEST_TIMEOUT_MS:-600000} " + MP + " run -m '" + MODEL + "' < '" + pfile + "'"], 600000);
-  if (r.code != 0) {
-    println("miniplayer failed (" + name + "):", trim(r.stderr));
+  r = lm_agent({provider: "miniplayer", model: MODEL}, prompt);
+  if (r.status != "ok") {
+    println("miniplayer failed (" + name + "):", r.error);
     exit(1);
   }
-  write_file(path_join(WORK, name + ".answer.txt"), r.stdout);
-  return r.stdout;
+  write_files(WORK, [{path: name + ".prompt.txt", content: prompt}, {path: name + ".answer.txt", content: r.reply}]);
+  return r.reply;
 }
 
-fn safe_path(p) {
-  return p != "" && !starts_with(p, "/") && !contains(p, "..") && !starts_with(p, ".mp") && !starts_with(p, ".git/");
-}
-
-// Parse `=== FILE: path ===` ... `=== END ===` blocks and write them under DIR. Returns the file count.
-fn write_blocks(answer) {
-  count = 0;
-  cur = null;
-  buf = [];
-  for (line in lines(answer)) {
-    m = regex_match(trim(line), "^=== FILE: (.+) ===$");
-    if (cur == null && m != null) {
-      cur = trim(m[1]);
-      buf = [];
-    } else if (cur != null && trim(line) == "=== END ===") {
-      body = buf;
-      if (len(body) > 0 && starts_with(trim(body[0]), "```")) {
-        body = slice(body, 1);
-      }
-      if (len(body) > 0 && starts_with(trim(body[len(body) - 1]), "```")) {
-        body = slice(body, 0, len(body) - 1);
-      }
-      if (safe_path(cur)) {
-        full = path_join(DIR, cur);
-        mkdir(dirname(full));
-        write_file(full, join(body, "\n") + "\n");
-        count = count + 1;
-      } else {
-        println("skipped unsafe path:", cur);
-      }
-      cur = null;
-    } else if (cur != null) {
-      push(buf, line);
-    }
+// Write the reply's file blocks; returns the reply's build/test commands (missing keys stay absent).
+fn apply(reply) {
+  res = write_files(DIR, parse_file_blocks(reply));
+  println("wrote", len(res.written), "files");
+  for (bad in res.rejected) {
+    println("rejected", bad.path + ":", bad.reason);
   }
-  return count;
+  return kv_from_last_paragraph(reply);
 }
 
-// Last `key: value` line wins, so a model that repeats itself in the final paragraph still parses.
-fn last_value(answer, key) {
-  found = null;
-  for (line in lines(answer)) {
-    m = regex_match(trim(line), "^" + key + ":\\s*(.+)$");
-    if (m != null) {
-      found = trim(m[1]);
-    }
-  }
-  return found;
-}
-
-fn run_in_dir(command_line) {
-  return system(["sh", "-c", "cd '" + DIR + "' && " + command_line + " 2>&1"], 300000);
-}
-
-fn tail_text(s, n) {
-  ls = lines(s);
-  if (len(ls) <= n) {
-    return s;
-  }
-  return join(slice(ls, len(ls) - n), "\n");
-}
-
-fn project_listing() {
-  out = "";
-  found = system(["find", DIR, "-type", "f", "-not", "-path", "*/node_modules/*", "-not", "-path", "*/.mp/*", "-not", "-path", "*/dist/*", "-not", "-path", "*/.git/*", "-not", "-name", "package-lock.json"]);
-  for (f in lines(found.stdout)) {
-    if (trim(f) != "") {
-      rel = replace(trim(f), DIR + "/", "");
-      out = out + "=== FILE: " + rel + " ===\n" + read_file(trim(f)) + "\n=== END ===\n";
-    }
-  }
-  return out;
+fn run(command, limit) {
+  r = system(split_command(command), {cwd: DIR});
+  return r.code == 0 ? null : f"""FAILED (exit {r.code})
+command: {command}
+{join(slice(lines(r.stdout + r.stderr), -limit), "\n")}""";
 }
 
 // ---- 1. design -------------------------------------------------------------------------------
 println("[1/3] design document");
-design = ask("design", "Write a concise design document in markdown (no code, under 120 lines) for this project.\n\nREQUIREMENTS\nCreate a TypeScript project: a command line note taker. Notes are plain .txt files stored in a single directory (default ./notes, overridable with NOTES_DIR). Commands: `create <name> [text]` (text from the argument or stdin), `list`, `show <name>`, `overwrite <name> [text]` (replace an existing note; error if missing), `delete <name>`. Note names are validated (letters, digits, dash, underscore only) so a name can never escape the directory. Exit code 0 on success, non-zero with a message on stderr on failure. Use only Node built-ins at runtime; tests use node:test through tsx or compiled output. State the file layout, module split, error behaviour, the test plan, and the exact build and test commands.");
-write_file(path_join(DIR, "DESIGN.md"), design);
+design = ask("design", """Write a concise design document in markdown (no code, under 120 lines) for this project.
+
+REQUIREMENTS
+Create a TypeScript project: a command line note taker. Notes are plain .txt files stored in a single directory (default ./notes, overridable with NOTES_DIR). Commands: `create <name> [text]` (text from the argument or stdin), `list`, `show <name>`, `overwrite <name> [text]` (replace an existing note; error if missing), `delete <name>`. Note names are validated (letters, digits, dash, underscore only) so a name can never escape the directory. Exit code 0 on success, non-zero with a message on stderr on failure. Use only Node built-ins at runtime; tests use node:test through tsx or compiled output. State the file layout, module split, error behaviour, the test plan, and the exact build and test commands.""");
+write_files(DIR, [{path: "DESIGN.md", content: design}]);
 
 // ---- 2. implement ----------------------------------------------------------------------------
 println("[2/3] implementation");
-impl = ask("implement", "You are a fresh engineer. Implement this project exactly as the design document says.\n\n" + FORMAT_RULES + "\nInclude package.json (with a `build` and a `test` script and devDependencies if needed), tsconfig.json, the source, and the tests.\n" + TAIL_RULES + "\n\nDESIGN DOCUMENT\n" + design);
-n = write_blocks(impl);
-println("wrote", n, "files");
-build_cmd = last_value(impl, "build_command");
-test_cmd = last_value(impl, "test_command");
-if (n == 0 || build_cmd == null || test_cmd == null) {
-  println("implementation reply was unusable (files:", n, "build:", build_cmd, "test:", test_cmd + ")");
-  println("see", path_join(WORK, "implement.answer.txt"));
+cfg = apply(ask("implement", f"""You are a fresh engineer. Implement this project exactly as the design document says.
+
+{FORMAT_RULES}
+Include package.json (with a `build` and a `test` script and devDependencies if needed), tsconfig.json, the source, and the tests.
+{TAIL_RULES}
+
+DESIGN DOCUMENT
+{design}"""));
+if (!has_key(cfg, "build_command") || !has_key(cfg, "test_command")) {
+  println("implementation reply was unusable (no build_command/test_command); see", path_join(WORK, "implement.answer.txt"));
   exit(1);
 }
 
 // ---- 3-4. build / test / fix loop ------------------------------------------------------------
 println("[3/3] build and test loop (max", MAX_ROUNDS, "fix rounds)");
 round = 0;
-ok = false;
-while (!ok && round <= MAX_ROUNDS) {
-  println("-- round", round, "| build:", build_cmd, "| test:", test_cmd);
-  failure = null;
-  inst = system(["sh", "-c", "cd '" + DIR + "' && [ -f package.json ] && (npm install --no-audit --no-fund 2>&1) || true"], 600000);
-  b = run_in_dir(build_cmd);
-  if (b.code != 0) {
-    failure = "BUILD FAILED (exit " + str(b.code) + ")\ncommand: " + build_cmd + "\n" + tail_text(b.stdout, 60);
-  } else {
-    t = run_in_dir(test_cmd);
-    if (t.code != 0) {
-      failure = "TESTS FAILED (exit " + str(t.code) + ")\ncommand: " + test_cmd + "\n" + tail_text(t.stdout, 80);
-    }
+failure = "first";
+while (failure != null) {
+  println("-- round", round, "| build:", cfg.build_command, "| test:", cfg.test_command);
+  if (file_exists(path_join(DIR, "package.json"))) {
+    system(["npm", "install", "--no-audit", "--no-fund"], {cwd: DIR});
   }
+  failure = run(cfg.build_command, 60);
   if (failure == null) {
-    ok = true;
-  } else if (round >= MAX_ROUNDS) {
+    failure = run(cfg.test_command, 80);
+  }
+  if (failure != null && round >= MAX_ROUNDS) {
     println("giving up after", round, "fix rounds");
     println(failure);
     exit(2);
-  } else {
+  }
+  if (failure != null) {
     round = round + 1;
     println(f"fix round {round}");
-    fix = ask(f"fix{round}", "A project you wrote fails. Fix it.\n\nDESIGN DOCUMENT\n" + design + "\n\nCURRENT FILES\n" + project_listing() + "\n\nFAILURE\n" + failure + "\n\nSend ONLY the files you change, in full. " + FORMAT_RULES + "\n" + TAIL_RULES);
-    changed = write_blocks(fix);
-    println("rewrote", changed, "files");
-    nb = last_value(fix, "build_command");
-    nt = last_value(fix, "test_command");
-    if (nb != null) {
-      build_cmd = nb;
-    }
-    if (nt != null) {
-      test_cmd = nt;
-    }
+    next = apply(ask(f"fix{round}", f"""A project you wrote fails. Fix it.
+
+DESIGN DOCUMENT
+{design}
+
+CURRENT FILES
+{format_file_blocks(read_tree(DIR))}
+
+FAILURE
+{failure}
+
+Send ONLY the files you change, in full. {FORMAT_RULES}
+{TAIL_RULES}"""));
+    cfg = merge(cfg, next);
   }
 }
 println("build and tests pass after", round, "fix rounds");
-
 println("done:", DIR);

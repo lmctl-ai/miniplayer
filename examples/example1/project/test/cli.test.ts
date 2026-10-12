@@ -1,145 +1,233 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
-const cliPath = path.resolve(process.cwd(), 'src/cli.ts');
-const tsxCli = path.resolve(
-  process.cwd(),
-  'node_modules',
-  'tsx',
-  'dist',
-  'cli.mjs'
-);
+const testDir = path.dirname(fileURLToPath(import.meta.url));
+const projectRoot = path.resolve(testDir, '..');
+const compiled = path.basename(projectRoot) === 'dist';
 
-function runCli(
-  args: string[],
-  options: { input?: string; env?: NodeJS.ProcessEnv } = {}
-) {
-  return spawnSync(process.execPath, [tsxCli, cliPath, ...args], {
-    input: options.input,
-    encoding: 'utf8',
-    env: { ...process.env, ...options.env },
+const cliPath = path.join(projectRoot, 'src', compiled ? 'cli.js' : 'cli.ts');
+const cliArgs = compiled ? [cliPath] : ['--import', 'tsx', cliPath];
+
+interface RunOptions {
+  notesDir: string;
+  input?: string;
+}
+
+interface RunResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** Spawns the CLI and always closes its stdin so it can never wait forever. */
+function run(args: string[], options: RunOptions): Promise<RunResult> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      process.execPath,
+      [...cliArgs, ...args],
+      {
+        cwd: projectRoot,
+        encoding: 'utf8',
+        env: { ...process.env, NOTES_DIR: options.notesDir },
+      },
+      (error, stdout, stderr) => {
+        const code =
+          error === null ? 0 : typeof error.code === 'number' ? error.code : undefined;
+        if (code === undefined) {
+          reject(error);
+          return;
+        }
+        resolve({ code, stdout: String(stdout), stderr: String(stderr) });
+      },
+    );
+
+    child.stdin?.on('error', () => {
+      /* the child may exit before reading its stdin */
+    });
+    child.stdin?.end(options.input ?? '');
   });
 }
 
-function tempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'notes-cli-cli-'));
+async function readNoteFile(notesDir: string, name: string): Promise<string> {
+  return fs.readFile(path.join(notesDir, `${name}.txt`), 'utf8');
 }
 
-test('cli create/list/show/overwrite/delete', () => {
-  const dir = tempDir();
-  const env = { NOTES_DIR: dir };
+describe('cli', () => {
+  let root = '';
+  let notesDir = '';
 
-  try {
-    let result = runCli(['create', 'alpha', 'hello'], { env });
-    assert.equal(result.status, 0);
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'notes-cli-'));
+    notesDir = path.join(root, 'notes');
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('exits 2 with a single stderr line when no command is given', async () => {
+    const result = await run([], { notesDir });
+    assert.equal(result.code, 2);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /^error: .*\n$/);
+  });
+
+  it('exits 2 for an unknown command', async () => {
+    const result = await run(['frobnicate'], { notesDir });
+    assert.equal(result.code, 2);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /^error: unknown command: frobnicate\n$/);
+  });
+
+  it('exits 2 for wrong arity', async () => {
+    const cases: string[][] = [
+      ['create'],
+      ['create', 'a', 'b', 'c'],
+      ['list', 'extra'],
+      ['show'],
+      ['show', 'a', 'b'],
+      ['overwrite'],
+      ['overwrite', 'a', 'b', 'c'],
+      ['delete'],
+      ['delete', 'a', 'b'],
+    ];
+    for (const args of cases) {
+      const result = await run(args, { notesDir });
+      assert.equal(result.code, 2, `${args.join(' ')} -> ${result.stderr}`);
+      assert.match(result.stderr, /^error: /);
+      assert.deepEqual(await fs.readdir(root), []);
+    }
+  });
+
+  it('exits 2 when NOTES_DIR is not a directory', async () => {
+    const filePath = path.join(root, 'notes-file');
+    await fs.writeFile(filePath, 'not a directory');
+    const result = await run(['list'], { notesDir: filePath });
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /not a directory/);
+  });
+
+  it('creates a note from an argument without touching stdin', async () => {
+    const result = await run(['create', 'first', 'from argument'], {
+      notesDir,
+      input: 'from stdin',
+    });
+    assert.equal(result.code, 0);
     assert.equal(result.stdout, '');
     assert.equal(result.stderr, '');
+    assert.equal(await readNoteFile(notesDir, 'first'), 'from argument');
+  });
 
-    result = runCli(['list'], { env });
-    assert.equal(result.status, 0);
-    assert.equal(result.stdout, 'alpha\n');
+  it('creates a note from stdin verbatim', async () => {
+    const text = 'line one\nline two\n\n';
+    const result = await run(['create', 'piped'], { notesDir, input: text });
+    assert.equal(result.code, 0);
+    assert.equal(await readNoteFile(notesDir, 'piped'), text);
+  });
 
-    result = runCli(['show', 'alpha'], { env });
-    assert.equal(result.status, 0);
-    assert.equal(result.stdout, 'hello');
+  it('creates an empty note from empty stdin', async () => {
+    const result = await run(['create', 'empty'], { notesDir, input: '' });
+    assert.equal(result.code, 0);
+    assert.equal(await readNoteFile(notesDir, 'empty'), '');
+  });
 
-    result = runCli(['overwrite', 'alpha', 'world'], { env });
-    assert.equal(result.status, 0);
+  it('exits 1 when creating a note that already exists', async () => {
+    await run(['create', 'dup', 'one'], { notesDir });
+    const result = await run(['create', 'dup', 'two'], { notesDir });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /^error: note already exists: dup\n$/);
+    assert.equal(await readNoteFile(notesDir, 'dup'), 'one');
+  });
 
-    result = runCli(['show', 'alpha'], { env });
-    assert.equal(result.status, 0);
-    assert.equal(result.stdout, 'world');
+  it('exits 2 for an invalid name without creating anything', async () => {
+    const result = await run(['create', '../escape', 'nope'], {
+      notesDir,
+      input: 'ignored',
+    });
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /invalid note name/);
+    assert.deepEqual(await fs.readdir(root), []);
+  });
 
-    result = runCli(['delete', 'alpha'], { env });
-    assert.equal(result.status, 0);
+  it('exits 1 for show/overwrite/delete on a missing note', async () => {
+    const cases: string[][] = [
+      ['show', 'ghost'],
+      ['overwrite', 'ghost', 'x'],
+      ['delete', 'ghost'],
+    ];
+    for (const args of cases) {
+      const result = await run(args, { notesDir });
+      assert.equal(result.code, 1, `${args.join(' ')} -> ${result.stderr}`);
+      assert.match(result.stderr, /^error: note not found: ghost\n$/);
+    }
+  });
 
-    result = runCli(['list'], { env });
-    assert.equal(result.status, 0);
+  it('shows the stored bytes verbatim', async () => {
+    const text = 'héllo\n\nwörld\n';
+    await run(['create', 'unicode', text], { notesDir });
+    const result = await run(['show', 'unicode'], { notesDir });
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, '');
+    assert.equal(result.stdout, text);
+  });
+
+  it('lists notes sorted, and prints nothing for an empty or missing directory', async () => {
+    let result = await run(['list'], { notesDir });
+    assert.equal(result.code, 0);
     assert.equal(result.stdout, '');
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
 
-test('cli reads text from stdin when omitted', () => {
-  const dir = tempDir();
+    await run(['create', 'charlie', 'c'], { notesDir });
+    await run(['create', 'alpha', 'a'], { notesDir });
+    await run(['create', 'bravo', 'b'], { notesDir });
 
-  try {
-    let result = runCli(['create', 'stdin-note'], {
-      env: { NOTES_DIR: dir },
-      input: 'from stdin\n',
-    });
-    assert.equal(result.status, 0);
+    result = await run(['list'], { notesDir });
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, 'alpha\nbravo\ncharlie\n');
 
-    result = runCli(['show', 'stdin-note'], {
-      env: { NOTES_DIR: dir },
-    });
-    assert.equal(result.status, 0);
-    assert.equal(result.stdout, 'from stdin\n');
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
+    result = await run(['list'], { notesDir: path.join(root, 'nowhere') });
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, '');
+  });
 
-test('cli rejects invalid name', () => {
-  const dir = tempDir();
+  it('round-trips create -> list -> show -> overwrite -> delete', async () => {
+    const created = await run(['create', 'todo', 'buy milk\n'], { notesDir });
+    assert.equal(created.code, 0);
 
-  try {
-    const result = runCli(['create', 'bad/name', 'x'], {
-      env: { NOTES_DIR: dir },
-    });
+    const listed = await run(['list'], { notesDir });
+    assert.equal(listed.stdout, 'todo\n');
 
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /Invalid note name/);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
+    const shown = await run(['show', 'todo'], { notesDir });
+    assert.equal(shown.code, 0);
+    assert.equal(shown.stdout, 'buy milk\n');
 
-test('cli rejects unknown command', () => {
-  const dir = tempDir();
+    const overwritten = await run(['overwrite', 'todo'], { notesDir, input: 'buy bread\n' });
+    assert.equal(overwritten.code, 0);
+    assert.equal(await readNoteFile(notesDir, 'todo'), 'buy bread\n');
 
-  try {
-    const result = runCli(['bogus'], { env: { NOTES_DIR: dir } });
+    const deleted = await run(['delete', 'todo'], { notesDir });
+    assert.equal(deleted.code, 0);
 
-    assert.equal(result.status, 2);
-    assert.match(result.stderr, /Unknown command/);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
+    const after = await run(['list'], { notesDir });
+    assert.equal(after.stdout, '');
+    assert.deepEqual(await fs.readdir(notesDir), []);
+  });
 
-test('cli reports missing note', () => {
-  const dir = tempDir();
+  it('preserves trailing newlines and non-ASCII text byte for byte', async () => {
+    const text = 'ßeta\n\n\n☃ snowman ☃\n';
+    await run(['create', 'bytes'], { notesDir, input: text });
+    assert.equal(await readNoteFile(notesDir, 'bytes'), text);
 
-  try {
-    const result = runCli(['show', 'missing'], {
-      env: { NOTES_DIR: dir },
-    });
+    const shown = await run(['show', 'bytes'], { notesDir });
+    assert.equal(shown.stdout, text);
 
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /Note not found/);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('cli usage errors exit 2', () => {
-  const dir = tempDir();
-
-  try {
-    let result = runCli([], { env: { NOTES_DIR: dir } });
-    assert.equal(result.status, 2);
-    assert.match(result.stderr, /Missing command/);
-
-    result = runCli(['create'], { env: { NOTES_DIR: dir } });
-    assert.equal(result.status, 2);
-    assert.match(result.stderr, /Missing name/);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+    const overwritten = await run(['overwrite', 'bytes', text.trimEnd()], { notesDir });
+    assert.equal(overwritten.code, 0);
+    assert.equal(await readNoteFile(notesDir, 'bytes'), text.trimEnd());
+  });
 });

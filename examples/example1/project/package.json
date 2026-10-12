@@ -1,18 +1,26 @@
 {
-  "name": "notes-cli",
+  "name": "notes",
   "version": "1.0.0",
   "private": true,
-  "type": "commonjs",
+  "description": "A tiny TypeScript CLI note taker backed by plain .txt files",
+  "type": "module",
   "bin": {
-    "notes": "dist/cli.js"
+    "notes": "dist/src/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "tsx --test test/*.test.ts"
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/src/cli.js",
+    "dev": "tsx src/cli.ts",
+    "test": "node --import tsx --test test/notes.test.ts test/cli.test.ts",
+    "test:dist": "npm run build && node --test dist/test"
   },
   "devDependencies": {
-    "@types/node": "^20.11.30",
-    "tsx": "^4.7.1",
-    "typescript": "^5.4.3"
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20.6.0"
   }
 }

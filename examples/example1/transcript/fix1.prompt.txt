@@ -1,0 +1,1036 @@
+A project you wrote fails. Fix it.
+
+DESIGN DOCUMENT
+# Design: `notes` — a TypeScript CLI note taker
+
+## Overview
+A small command line note taker. Each note is a plain `.txt` file inside one
+directory (`NOTES_DIR`, default `./notes`). The CLI never recurses, never
+touches anything outside that directory, and uses only Node built-ins at
+runtime (`node:fs`, `node:path`, `node:process`). All failures print one line
+to stderr and exit non-zero.
+
+## File layout
+```
+package.json          scripts, devDeps: typescript, tsx, @types/node
+tsconfig.json         strict, module nodenext, rootDir ".", outDir "dist"
+.gitignore            dist/, notes/, node_modules/
+src/
+  cli.ts              entry point: argv parsing, stdin, exit codes
+  commands.ts         command implementations (create/list/show/overwrite/delete)
+  notes.ts            notes-dir resolution, name validation, fs operations
+  errors.ts           AppError + exit-code constants
+test/
+  notes.test.ts       unit tests for the fs/validation layer
+  cli.test.ts         end-to-end tests spawning the CLI
+notes/                default data directory (created on demand)
+```
+Build output mirrors this (`dist/src/...`, `dist/test/...`) so tests run
+against either source or compiled sources.
+
+## Module split
+- **errors.ts** — `AppError { message, exitCode }`; codes `USAGE = 2`,
+  `FAILURE = 1`. Nothing else in the codebase calls `process.exit`.
+- **notes.ts** — the only module that touches the filesystem. Exports
+  `validateName`, `resolvePath`, `createNote`, `overwriteNote`, `readNote`,
+  `listNotes`, `deleteNote`. It is pure with respect to I/O targets: the notes
+  directory is passed in, never read from `process.env` here, which makes unit
+  testing trivial.
+- **commands.ts** — one function per command. Maps argv/stdin input onto
+  `notes.ts` calls, decides what goes to stdout, and translates missing-input
+  cases into `AppError`.
+- **cli.ts** — reads `process.argv.slice(2)`, resolves the notes directory from
+  `NOTES_DIR` (falling back to `./notes`), parses the command word and
+  positionals, supplies a stdin reader, dispatches, and sets
+  `process.exitCode`. No options are defined, so the first token is always the
+  command and later tokens are positional.
+
+## Name validation and confinement
+A note name must match `^[A-Za-z0-9_-]{1,64}$`. Anything else — empty, `.`,
+`..`, slashes, backslashes, dots, spaces, absolute paths, NUL bytes — is
+rejected with exit code 2 *before* any path is built. Validation, not path
+normalisation, is the security boundary. As defence in depth, `resolvePath`
+asserts that `path.dirname(joined) === notesDir` and otherwise raises an
+internal error. The stored filename is always `<name>.txt`.
+
+## Commands and error behaviour
+| Command | Behaviour |
+|---|---|
+| `create <name> [text]` | Writes `<name>.txt`; fails if it already exists. |
+| `list` | Prints note names without extension, sorted, one per line. Non-`.txt` files are ignored. Empty directory prints nothing, exit 0. |
+| `show <name>` | Writes the file's bytes verbatim to stdout. |
+| `overwrite <name> [text]` | Replaces an existing note; fails if missing. |
+| `delete <name>` | Removes the note; fails if missing. |
+
+When `[text]` is omitted, stdin is read to EOF and used verbatim (no trailing
+newline is added or stripped). If the argument is present, stdin is not read at
+all. If stdin is a TTY and `[text]` is omitted, the note is created empty.
+
+Failures always produce one `error: <message>` line on stderr:
+
+| Condition | Exit |
+|---|---|
+| Missing/unknown command, wrong arity, `NOTES_DIR` unusable | 2 |
+| Invalid name | 2 |
+| `create` on an existing note | 1 |
+| `show`/`overwrite`/`delete` on a missing note | 1 |
+| Filesystem error (EACCES, ENOSPC, …) | 1 |
+
+Creating the notes directory is attempted lazily on write; `list` on a
+nonexistent directory is treated as empty rather than an error.
+
+## Build and test commands
+Install: `npm install`
+Build: `npm run build` → `tsc -p tsconfig.json`
+Run compiled: `node dist/src/cli.js list`
+Run from source: `npx tsx src/cli.ts list`
+Test (source, default): `npm test` → `node --import tsx --test test`
+Test (compiled): `npm run test:dist` → `npm run build && node --test dist/test`
+Type-check only: `npx tsc --noEmit`
+
+## Test plan
+`test/notes.test.ts` (unit, against a fresh `mkdtemp` directory):
+- validation table: accepted names (`a`, `A_1`, `my-note`, 64 chars) and
+  rejected ones (`""`, `.`, `..`, `../x`, `a/b`, `a\\b`, `a b`, `a.txt`, `a.b`,
+  65 chars, NUL).
+- a traversal attempt (`../secret`) leaves the parent directory untouched.
+- create writes expected content; create on existing note throws `AppError`
+  with code 1.
+- show/overwrite/delete on a missing note throw code 1; overwrite replaces
+  content exactly.
+- `listNotes` sorts, ignores `README.md` and subdirectories, and returns `[]`
+  for a missing directory.
+
+`test/cli.test.ts` (end-to-end, spawning `tsx src/cli.ts` via `execFile` with a
+temporary `NOTES_DIR`): each command's stdout, stderr and exit code; text via
+argument and via piped stdin, asserting argument precedence; empty stdin;
+missing/unknown command and wrong arity give 2; invalid name gives 2 with no
+file created; missing note gives 1; `list` output ordering across several
+notes; round-trip `create` → `list` → `show` → `overwrite` → `delete`; content
+preserved byte-for-byte including trailing newlines and non-ASCII text.
+
+## Out of scope
+Editing, search, subdirectories, file locking, a config file, and Windows
+reserved-name handling.
+
+CURRENT FILES
+=== FILE: .gitignore ===
+dist/
+notes/
+node_modules/
+=== END ===
+=== FILE: DESIGN.md ===
+# Design: `notes` — a TypeScript CLI note taker
+
+## Overview
+A small command line note taker. Each note is a plain `.txt` file inside one
+directory (`NOTES_DIR`, default `./notes`). The CLI never recurses, never
+touches anything outside that directory, and uses only Node built-ins at
+runtime (`node:fs`, `node:path`, `node:process`). All failures print one line
+to stderr and exit non-zero.
+
+## File layout
+```
+package.json          scripts, devDeps: typescript, tsx, @types/node
+tsconfig.json         strict, module nodenext, rootDir ".", outDir "dist"
+.gitignore            dist/, notes/, node_modules/
+src/
+  cli.ts              entry point: argv parsing, stdin, exit codes
+  commands.ts         command implementations (create/list/show/overwrite/delete)
+  notes.ts            notes-dir resolution, name validation, fs operations
+  errors.ts           AppError + exit-code constants
+test/
+  notes.test.ts       unit tests for the fs/validation layer
+  cli.test.ts         end-to-end tests spawning the CLI
+notes/                default data directory (created on demand)
+```
+Build output mirrors this (`dist/src/...`, `dist/test/...`) so tests run
+against either source or compiled sources.
+
+## Module split
+- **errors.ts** — `AppError { message, exitCode }`; codes `USAGE = 2`,
+  `FAILURE = 1`. Nothing else in the codebase calls `process.exit`.
+- **notes.ts** — the only module that touches the filesystem. Exports
+  `validateName`, `resolvePath`, `createNote`, `overwriteNote`, `readNote`,
+  `listNotes`, `deleteNote`. It is pure with respect to I/O targets: the notes
+  directory is passed in, never read from `process.env` here, which makes unit
+  testing trivial.
+- **commands.ts** — one function per command. Maps argv/stdin input onto
+  `notes.ts` calls, decides what goes to stdout, and translates missing-input
+  cases into `AppError`.
+- **cli.ts** — reads `process.argv.slice(2)`, resolves the notes directory from
+  `NOTES_DIR` (falling back to `./notes`), parses the command word and
+  positionals, supplies a stdin reader, dispatches, and sets
+  `process.exitCode`. No options are defined, so the first token is always the
+  command and later tokens are positional.
+
+## Name validation and confinement
+A note name must match `^[A-Za-z0-9_-]{1,64}$`. Anything else — empty, `.`,
+`..`, slashes, backslashes, dots, spaces, absolute paths, NUL bytes — is
+rejected with exit code 2 *before* any path is built. Validation, not path
+normalisation, is the security boundary. As defence in depth, `resolvePath`
+asserts that `path.dirname(joined) === notesDir` and otherwise raises an
+internal error. The stored filename is always `<name>.txt`.
+
+## Commands and error behaviour
+| Command | Behaviour |
+|---|---|
+| `create <name> [text]` | Writes `<name>.txt`; fails if it already exists. |
+| `list` | Prints note names without extension, sorted, one per line. Non-`.txt` files are ignored. Empty directory prints nothing, exit 0. |
+| `show <name>` | Writes the file's bytes verbatim to stdout. |
+| `overwrite <name> [text]` | Replaces an existing note; fails if missing. |
+| `delete <name>` | Removes the note; fails if missing. |
+
+When `[text]` is omitted, stdin is read to EOF and used verbatim (no trailing
+newline is added or stripped). If the argument is present, stdin is not read at
+all. If stdin is a TTY and `[text]` is omitted, the note is created empty.
+
+Failures always produce one `error: <message>` line on stderr:
+
+| Condition | Exit |
+|---|---|
+| Missing/unknown command, wrong arity, `NOTES_DIR` unusable | 2 |
+| Invalid name | 2 |
+| `create` on an existing note | 1 |
+| `show`/`overwrite`/`delete` on a missing note | 1 |
+| Filesystem error (EACCES, ENOSPC, …) | 1 |
+
+Creating the notes directory is attempted lazily on write; `list` on a
+nonexistent directory is treated as empty rather than an error.
+
+## Build and test commands
+Install: `npm install`
+Build: `npm run build` → `tsc -p tsconfig.json`
+Run compiled: `node dist/src/cli.js list`
+Run from source: `npx tsx src/cli.ts list`
+Test (source, default): `npm test` → `node --import tsx --test test`
+Test (compiled): `npm run test:dist` → `npm run build && node --test dist/test`
+Type-check only: `npx tsc --noEmit`
+
+## Test plan
+`test/notes.test.ts` (unit, against a fresh `mkdtemp` directory):
+- validation table: accepted names (`a`, `A_1`, `my-note`, 64 chars) and
+  rejected ones (`""`, `.`, `..`, `../x`, `a/b`, `a\\b`, `a b`, `a.txt`, `a.b`,
+  65 chars, NUL).
+- a traversal attempt (`../secret`) leaves the parent directory untouched.
+- create writes expected content; create on existing note throws `AppError`
+  with code 1.
+- show/overwrite/delete on a missing note throw code 1; overwrite replaces
+  content exactly.
+- `listNotes` sorts, ignores `README.md` and subdirectories, and returns `[]`
+  for a missing directory.
+
+`test/cli.test.ts` (end-to-end, spawning `tsx src/cli.ts` via `execFile` with a
+temporary `NOTES_DIR`): each command's stdout, stderr and exit code; text via
+argument and via piped stdin, asserting argument precedence; empty stdin;
+missing/unknown command and wrong arity give 2; invalid name gives 2 with no
+file created; missing note gives 1; `list` output ordering across several
+notes; round-trip `create` → `list` → `show` → `overwrite` → `delete`; content
+preserved byte-for-byte including trailing newlines and non-ASCII text.
+
+## Out of scope
+Editing, search, subdirectories, file locking, a config file, and Windows
+reserved-name handling.
+=== END ===
+=== FILE: package.json ===
+{
+  "name": "notes",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A tiny TypeScript CLI note taker backed by plain .txt files",
+  "type": "module",
+  "bin": {
+    "notes": "dist/src/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/src/cli.js",
+    "dev": "tsx src/cli.ts",
+    "test": "node --import tsx --test test/notes.test.ts test/cli.test.ts",
+    "test:dist": "npm run build && node --test dist/test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20.6.0"
+  }
+}
+=== END ===
+=== FILE: src/cli.ts ===
+#!/usr/bin/env node
+/**
+ * Entry point.
+ *
+ * Parses `process.argv`, resolves the notes directory from `NOTES_DIR`
+ * (default `./notes`), supplies the stdin reader, dispatches to a command and
+ * turns any `AppError` into a single stderr line plus a non-zero exit code.
+ */
+import process from 'node:process';
+
+import { commands, type CommandIO } from './commands.js';
+import { AppError, USAGE, toAppError } from './errors.js';
+import { assertUsableDir } from './notes.js';
+
+/** Used when `NOTES_DIR` is not set. */
+export const DEFAULT_NOTES_DIR = './notes';
+
+/** Reads `NOTES_DIR`, falling back to `./notes`. */
+export function resolveNotesDir(env: NodeJS.ProcessEnv): string {
+  const configured = env.NOTES_DIR;
+  if (configured === undefined) {
+    return DEFAULT_NOTES_DIR;
+  }
+  if (configured.trim() === '') {
+    throw new AppError('NOTES_DIR is empty', USAGE);
+  }
+  return configured;
+}
+
+/** Reads stdin to EOF; an interactive TTY counts as "no input". */
+async function readStdin(): Promise<string> {
+  if (process.stdin.isTTY) {
+    return '';
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer));
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function main(argv: string[]): Promise<void> {
+  const [command, ...args] = argv;
+  if (command === undefined) {
+    throw new AppError('missing command', USAGE);
+  }
+  const handler = commands.get(command);
+  if (handler === undefined) {
+    throw new AppError(`unknown command: ${command}`, USAGE);
+  }
+
+  const notesDir = resolveNotesDir(process.env);
+  await assertUsableDir(notesDir);
+
+  const io: CommandIO = {
+    notesDir,
+    readStdin,
+    write: (data: string | Uint8Array): void => {
+      process.stdout.write(data);
+    },
+  };
+
+  await handler(io, args);
+}
+
+main(process.argv.slice(2)).catch((error: unknown) => {
+  const appError = toAppError(error);
+  const message = appError.message.replace(/[\r\n]+/g, ' ');
+  process.stderr.write(`error: ${message}\n`);
+  process.exitCode = appError.exitCode;
+});
+=== END ===
+=== FILE: src/commands.ts ===
+/**
+ * Command implementations.
+ *
+ * One function per command: it maps positional arguments (and optionally
+ * stdin) onto the filesystem layer in `notes.ts`, decides what reaches stdout
+ * and turns missing-input cases into `AppError`s.
+ */
+import { AppError, USAGE } from './errors.js';
+import {
+  createNote,
+  deleteNote,
+  listNotes,
+  overwriteNote,
+  readNote,
+  validateName,
+} from './notes.js';
+
+/** Everything a command needs from its environment. */
+export interface CommandIO {
+  /** Directory holding the notes (absolute or relative to the process cwd). */
+  notesDir: string;
+  /** Resolves with everything read from stdin, decoded as UTF-8. */
+  readStdin: () => Promise<string>;
+  /** Writes to stdout, verbatim. */
+  write: (data: string | Uint8Array) => void;
+}
+
+export type Command = (io: CommandIO, args: string[]) => Promise<void>;
+
+function checkArity(usage: string, args: string[], min: number, max: number): void {
+  if (args.length < min || args.length > max) {
+    throw new AppError(`usage: ${usage}`, USAGE);
+  }
+}
+
+/** The `[text]` argument, or stdin when it was left out. */
+async function noteText(io: CommandIO, args: string[], index: number): Promise<string> {
+  if (args.length > index) {
+    return args[index];
+  }
+  return io.readStdin();
+}
+
+export const create: Command = async (io, args) => {
+  checkArity('create <name> [text]', args, 1, 2);
+  const name = args[0];
+  validateName(name);
+  const text = await noteText(io, args, 1);
+  await createNote(io.notesDir, name, text);
+};
+
+export const list: Command = async (io, args) => {
+  checkArity('list', args, 0, 0);
+  const names = await listNotes(io.notesDir);
+  if (names.length > 0) {
+    io.write(`${names.join('\n')}\n`);
+  }
+};
+
+export const show: Command = async (io, args) => {
+  checkArity('show <name>', args, 1, 1);
+  const name = args[0];
+  validateName(name);
+  io.write(await readNote(io.notesDir, name));
+};
+
+export const overwrite: Command = async (io, args) => {
+  checkArity('overwrite <name> [text]', args, 1, 2);
+  const name = args[0];
+  validateName(name);
+  const text = await noteText(io, args, 1);
+  await overwriteNote(io.notesDir, name, text);
+};
+
+export const deleteCommand: Command = async (io, args) => {
+  checkArity('delete <name>', args, 1, 1);
+  const name = args[0];
+  validateName(name);
+  await deleteNote(io.notesDir, name);
+};
+
+/** Command word -> implementation. */
+export const commands = new Map<string, Command>([
+  ['create', create],
+  ['list', list],
+  ['show', show],
+  ['overwrite', overwrite],
+  ['delete', deleteCommand],
+]);
+=== END ===
+=== FILE: src/errors.ts ===
+/**
+ * Error plumbing for the whole CLI.
+ *
+ * Every failure path funnels through `AppError`; only `cli.ts` translates it
+ * into a stderr line plus `process.exitCode`.
+ */
+
+/** Wrong usage: bad arguments, unknown commands, an unusable NOTES_DIR. */
+export const USAGE = 2;
+
+/** Runtime failures: missing notes, filesystem errors, ... */
+export const FAILURE = 1;
+
+export class AppError extends Error {
+  readonly exitCode: number;
+
+  constructor(message: string, exitCode: number = FAILURE) {
+    super(message);
+    this.name = 'AppError';
+    this.exitCode = exitCode;
+  }
+}
+
+/** Normalises anything thrown into an `AppError` (defaulting to exit code 1). */
+export function toAppError(error: unknown): AppError {
+  if (error instanceof AppError) {
+    return error;
+  }
+  if (error instanceof Error) {
+    return new AppError(error.message, FAILURE);
+  }
+  return new AppError(String(error), FAILURE);
+}
+=== END ===
+=== FILE: src/notes.ts ===
+/**
+ * The filesystem layer of the note taker.
+ *
+ * This is the only module in the project that touches the filesystem. It never
+ * reads `process.env`: the notes directory is always passed in by the caller,
+ * which keeps the module pure with respect to its I/O targets and trivial to
+ * unit test.
+ */
+import { promises as fs, type FileHandle } from 'node:fs';
+import path from 'node:path';
+
+import { AppError, FAILURE, USAGE, toAppError } from './errors.js';
+
+/** Allowed note names: 1 to 64 characters of `[A-Za-z0-9_-]`. */
+export const NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Every note is stored as `<name>.txt`. */
+export const EXTENSION = '.txt';
+
+function isErrno(error: unknown, ...codes: string[]): boolean {
+  const code = (error as NodeJS.ErrnoException | null | undefined)?.code;
+  return typeof code === 'string' && codes.includes(code);
+}
+
+/**
+ * The security boundary: validation happens *before* any path is built.
+ * Empty names, `.`, `..`, slashes, dots, spaces, NUL bytes, ... all fail here.
+ */
+export function validateName(name: string): void {
+  if (typeof name !== 'string' || !NAME_PATTERN.test(name)) {
+    throw new AppError(`invalid note name: ${JSON.stringify(name)}`, USAGE);
+  }
+}
+
+/**
+ * Builds the absolute path of a note. As defence in depth the joined path is
+ * checked to still live directly inside the notes directory.
+ */
+export function resolvePath(notesDir: string, name: string): string {
+  validateName(name);
+  const base = path.resolve(notesDir);
+  const file = path.join(base, `${name}${EXTENSION}`);
+  if (path.dirname(file) !== base) {
+    throw new AppError('internal error: resolved path escapes the notes directory', FAILURE);
+  }
+  return file;
+}
+
+/**
+ * Verifies that `notesDir` is usable: it either does not exist yet (it is
+ * created lazily on the first write) or it is a directory.
+ */
+export async function assertUsableDir(notesDir: string): Promise<void> {
+  const base = path.resolve(notesDir);
+  let stats;
+  try {
+    stats = await fs.stat(base);
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) {
+      return;
+    }
+    throw toAppError(error);
+  }
+  if (!stats.isDirectory()) {
+    throw new AppError(`notes directory is not a directory: ${notesDir}`, USAGE);
+  }
+}
+
+async function ensureDir(dir: string): Promise<void> {
+  try {
+    await fs.mkdir(dir, { recursive: true });
+  } catch (error) {
+    throw toAppError(error);
+  }
+}
+
+function notFound(error: unknown, name: string): AppError {
+  if (isErrno(error, 'ENOENT')) {
+    return new AppError(`note not found: ${name}`, FAILURE);
+  }
+  return toAppError(error);
+}
+
+async function openExisting(file: string, name: string): Promise<FileHandle> {
+  try {
+    return await fs.open(file, 'r+');
+  } catch (error) {
+    throw notFound(error, name);
+  }
+}
+
+/** Writes `<name>.txt`; fails if the note already exists. */
+export async function createNote(notesDir: string, name: string, text: string): Promise<void> {
+  const file = resolvePath(notesDir, name);
+  await ensureDir(path.dirname(file));
+  try {
+    await fs.writeFile(file, text, { encoding: 'utf8', flag: 'wx' });
+  } catch (error) {
+    if (isErrno(error, 'EEXIST')) {
+      throw new AppError(`note already exists: ${name}`, FAILURE);
+    }
+    throw toAppError(error);
+  }
+}
+
+/** Replaces an existing note; fails if the note is missing. */
+export async function overwriteNote(
+  notesDir: string,
+  name: string,
+  text: string,
+): Promise<void> {
+  const file = resolvePath(notesDir, name);
+  const handle = await openExisting(file, name);
+  try {
+    await handle.truncate(0);
+    await handle.write(text, 0, 'utf8');
+  } catch (error) {
+    throw toAppError(error);
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Reads the raw bytes of a note; fails if the note is missing. */
+export async function readNote(notesDir: string, name: string): Promise<Buffer> {
+  const file = resolvePath(notesDir, name);
+  try {
+    return await fs.readFile(file);
+  } catch (error) {
+    throw notFound(error, name);
+  }
+}
+
+/**
+ * Lists note names (without extension), sorted. Non-`.txt` entries and
+ * directories are ignored, and a missing directory simply lists nothing.
+ */
+export async function listNotes(notesDir: string): Promise<string[]> {
+  const base = path.resolve(notesDir);
+  let entries;
+  try {
+    entries = await fs.readdir(base, { withFileTypes: true });
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) {
+      return [];
+    }
+    throw toAppError(error);
+  }
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(EXTENSION))
+    .map((entry) => entry.name.slice(0, -EXTENSION.length))
+    .sort();
+}
+
+/** Removes a note; fails if the note is missing. */
+export async function deleteNote(notesDir: string, name: string): Promise<void> {
+  const file = resolvePath(notesDir, name);
+  try {
+    await fs.unlink(file);
+  } catch (error) {
+    throw notFound(error, name);
+  }
+}
+=== END ===
+=== FILE: test/cli.test.ts ===
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+const testDir = path.dirname(fileURLToPath(import.meta.url));
+const projectRoot = path.resolve(testDir, '..');
+const compiled = path.basename(projectRoot) === 'dist';
+
+const cliPath = path.join(projectRoot, 'src', compiled ? 'cli.js' : 'cli.ts');
+const cliArgs = compiled ? [cliPath] : ['--import', 'tsx', cliPath];
+
+interface RunOptions {
+  notesDir: string;
+  input?: string;
+}
+
+interface RunResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** Spawns the CLI and always closes its stdin so it can never wait forever. */
+function run(args: string[], options: RunOptions): Promise<RunResult> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      process.execPath,
+      [...cliArgs, ...args],
+      {
+        cwd: projectRoot,
+        encoding: 'utf8',
+        env: { ...process.env, NOTES_DIR: options.notesDir },
+      },
+      (error, stdout, stderr) => {
+        const code =
+          error === null ? 0 : typeof error.code === 'number' ? error.code : undefined;
+        if (code === undefined) {
+          reject(error);
+          return;
+        }
+        resolve({ code, stdout: String(stdout), stderr: String(stderr) });
+      },
+    );
+
+    child.stdin?.on('error', () => {
+      /* the child may exit before reading its stdin */
+    });
+    child.stdin?.end(options.input ?? '');
+  });
+}
+
+async function readNoteFile(notesDir: string, name: string): Promise<string> {
+  return fs.readFile(path.join(notesDir, `${name}.txt`), 'utf8');
+}
+
+describe('cli', () => {
+  let root = '';
+  let notesDir = '';
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'notes-cli-'));
+    notesDir = path.join(root, 'notes');
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('exits 2 with a single stderr line when no command is given', async () => {
+    const result = await run([], { notesDir });
+    assert.equal(result.code, 2);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /^error: .*\n$/);
+  });
+
+  it('exits 2 for an unknown command', async () => {
+    const result = await run(['frobnicate'], { notesDir });
+    assert.equal(result.code, 2);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /^error: unknown command: frobnicate\n$/);
+  });
+
+  it('exits 2 for wrong arity', async () => {
+    const cases: string[][] = [
+      ['create'],
+      ['create', 'a', 'b', 'c'],
+      ['list', 'extra'],
+      ['show'],
+      ['show', 'a', 'b'],
+      ['overwrite'],
+      ['overwrite', 'a', 'b', 'c'],
+      ['delete'],
+      ['delete', 'a', 'b'],
+    ];
+    for (const args of cases) {
+      const result = await run(args, { notesDir });
+      assert.equal(result.code, 2, `${args.join(' ')} -> ${result.stderr}`);
+      assert.match(result.stderr, /^error: /);
+      assert.deepEqual(await fs.readdir(root), []);
+    }
+  });
+
+  it('exits 2 when NOTES_DIR is not a directory', async () => {
+    const filePath = path.join(root, 'notes-file');
+    await fs.writeFile(filePath, 'not a directory');
+    const result = await run(['list'], { notesDir: filePath });
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /not a directory/);
+  });
+
+  it('creates a note from an argument without touching stdin', async () => {
+    const result = await run(['create', 'first', 'from argument'], {
+      notesDir,
+      input: 'from stdin',
+    });
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, '');
+    assert.equal(await readNoteFile(notesDir, 'first'), 'from argument');
+  });
+
+  it('creates a note from stdin verbatim', async () => {
+    const text = 'line one\nline two\n\n';
+    const result = await run(['create', 'piped'], { notesDir, input: text });
+    assert.equal(result.code, 0);
+    assert.equal(await readNoteFile(notesDir, 'piped'), text);
+  });
+
+  it('creates an empty note from empty stdin', async () => {
+    const result = await run(['create', 'empty'], { notesDir, input: '' });
+    assert.equal(result.code, 0);
+    assert.equal(await readNoteFile(notesDir, 'empty'), '');
+  });
+
+  it('exits 1 when creating a note that already exists', async () => {
+    await run(['create', 'dup', 'one'], { notesDir });
+    const result = await run(['create', 'dup', 'two'], { notesDir });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /^error: note already exists: dup\n$/);
+    assert.equal(await readNoteFile(notesDir, 'dup'), 'one');
+  });
+
+  it('exits 2 for an invalid name without creating anything', async () => {
+    const result = await run(['create', '../escape', 'nope'], {
+      notesDir,
+      input: 'ignored',
+    });
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /invalid note name/);
+    assert.deepEqual(await fs.readdir(root), []);
+  });
+
+  it('exits 1 for show/overwrite/delete on a missing note', async () => {
+    const cases: string[][] = [
+      ['show', 'ghost'],
+      ['overwrite', 'ghost', 'x'],
+      ['delete', 'ghost'],
+    ];
+    for (const args of cases) {
+      const result = await run(args, { notesDir });
+      assert.equal(result.code, 1, `${args.join(' ')} -> ${result.stderr}`);
+      assert.match(result.stderr, /^error: note not found: ghost\n$/);
+    }
+  });
+
+  it('shows the stored bytes verbatim', async () => {
+    const text = 'héllo\n\nwörld\n';
+    await run(['create', 'unicode', text], { notesDir });
+    const result = await run(['show', 'unicode'], { notesDir });
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, '');
+    assert.equal(result.stdout, text);
+  });
+
+  it('lists notes sorted, and prints nothing for an empty or missing directory', async () => {
+    let result = await run(['list'], { notesDir });
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, '');
+
+    await run(['create', 'charlie', 'c'], { notesDir });
+    await run(['create', 'alpha', 'a'], { notesDir });
+    await run(['create', 'bravo', 'b'], { notesDir });
+
+    result = await run(['list'], { notesDir });
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, 'alpha\nbravo\ncharlie\n');
+
+    result = await run(['list'], { notesDir: path.join(root, 'nowhere') });
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, '');
+  });
+
+  it('round-trips create -> list -> show -> overwrite -> delete', async () => {
+    const created = await run(['create', 'todo', 'buy milk\n'], { notesDir });
+    assert.equal(created.code, 0);
+
+    const listed = await run(['list'], { notesDir });
+    assert.equal(listed.stdout, 'todo\n');
+
+    const shown = await run(['show', 'todo'], { notesDir });
+    assert.equal(shown.code, 0);
+    assert.equal(shown.stdout, 'buy milk\n');
+
+    const overwritten = await run(['overwrite', 'todo'], { notesDir, input: 'buy bread\n' });
+    assert.equal(overwritten.code, 0);
+    assert.equal(await readNoteFile(notesDir, 'todo'), 'buy bread\n');
+
+    const deleted = await run(['delete', 'todo'], { notesDir });
+    assert.equal(deleted.code, 0);
+
+    const after = await run(['list'], { notesDir });
+    assert.equal(after.stdout, '');
+    assert.deepEqual(await fs.readdir(notesDir), []);
+  });
+
+  it('preserves trailing newlines and non-ASCII text byte for byte', async () => {
+    const text = 'ßeta\n\n\n☃ snowman ☃\n';
+    await run(['create', 'bytes'], { notesDir, input: text });
+    assert.equal(await readNoteFile(notesDir, 'bytes'), text);
+
+    const shown = await run(['show', 'bytes'], { notesDir });
+    assert.equal(shown.stdout, text);
+
+    const overwritten = await run(['overwrite', 'bytes', text.trimEnd()], { notesDir });
+    assert.equal(overwritten.code, 0);
+    assert.equal(await readNoteFile(notesDir, 'bytes'), text.trimEnd());
+  });
+});
+=== END ===
+=== FILE: test/notes.test.ts ===
+import assert from 'node:assert/strict';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+
+import { AppError, FAILURE, USAGE } from '../src/errors.js';
+import {
+  createNote,
+  deleteNote,
+  listNotes,
+  overwriteNote,
+  readNote,
+  resolvePath,
+  validateName,
+} from '../src/notes.js';
+
+function exitedWith(code: number): (error: unknown) => boolean {
+  return (error: unknown): boolean => error instanceof AppError && error.exitCode === code;
+}
+
+describe('validateName', () => {
+  const accepted = ['a', 'A_1', 'my-note', 'x'.repeat(64)];
+
+  for (const name of accepted) {
+    it(`accepts ${JSON.stringify(name.length > 20 ? `${name.slice(0, 16)}...` : name)}`, () => {
+      assert.doesNotThrow(() => {
+        validateName(name);
+      });
+    });
+  }
+
+  const rejected: Array<[string, string]> = [
+    ['empty string', ''],
+    ['a single dot', '.'],
+    ['double dots', '..'],
+    ['parent traversal', '../x'],
+    ['a forward slash', 'a/b'],
+    ['a backslash', 'a\\b'],
+    ['a space', 'a b'],
+    ['a .txt extension', 'a.txt'],
+    ['a dot in the middle', 'a.b'],
+    ['65 characters', 'x'.repeat(65)],
+    ['a NUL byte', 'a\u0000b'],
+  ];
+
+  for (const [label, name] of rejected) {
+    it(`rejects ${label}`, () => {
+      assert.throws(() => {
+        validateName(name);
+      }, exitedWith(USAGE));
+    });
+  }
+});
+
+describe('notes filesystem layer', () => {
+  let root = '';
+  let notesDir = '';
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'notes-unit-'));
+    notesDir = path.join(root, 'notes');
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('resolves note paths inside the notes directory', () => {
+    const dir = path.resolve('/tmp/notes');
+    assert.equal(resolvePath(dir, 'a'), path.join(dir, 'a.txt'));
+  });
+
+  it('refuses a traversal name and leaves the parent directory untouched', async () => {
+    await assert.rejects(createNote(notesDir, '../secret', 'nope'), exitedWith(USAGE));
+    assert.throws(() => resolvePath(notesDir, '../secret'), exitedWith(USAGE));
+    assert.deepEqual(await fs.readdir(root), []);
+  });
+
+  it('creates the notes directory lazily and writes the content', async () => {
+    await createNote(notesDir, 'grocery', 'milk\n');
+    const file = path.join(notesDir, 'grocery.txt');
+    assert.equal(await fs.readFile(file, 'utf8'), 'milk\n');
+  });
+
+  it('fails with code 1 when the note already exists', async () => {
+    await createNote(notesDir, 'grocery', 'milk');
+    await assert.rejects(createNote(notesDir, 'grocery', 'bread'), exitedWith(FAILURE));
+    assert.equal(await fs.readFile(path.join(notesDir, 'grocery.txt'), 'utf8'), 'milk');
+  });
+
+  it('reads back exactly the bytes that were written', async () => {
+    const text = 'héllo\n\nwörld\n';
+    await createNote(notesDir, 'unicode', text);
+    const data = await readNote(notesDir, 'unicode');
+    assert.equal(Buffer.compare(data, Buffer.from(text, 'utf8')), 0);
+  });
+
+  it('fails with code 1 when showing a missing note', async () => {
+    await assert.rejects(readNote(notesDir, 'ghost'), exitedWith(FAILURE));
+  });
+
+  it('overwrites a note exactly, and fails with code 1 when it is missing', async () => {
+    await assert.rejects(overwriteNote(notesDir, 'ghost', 'x'), exitedWith(FAILURE));
+
+    await createNote(notesDir, 'note', 'a much longer original body\n');
+    await overwriteNote(notesDir, 'note', 'short\n');
+    assert.equal(await fs.readFile(path.join(notesDir, 'note.txt'), 'utf8'), 'short\n');
+  });
+
+  it('deletes a note, and fails with code 1 when it is missing', async () => {
+    await assert.rejects(deleteNote(notesDir, 'ghost'), exitedWith(FAILURE));
+
+    await createNote(notesDir, 'gone', 'bye');
+    await deleteNote(notesDir, 'gone');
+    await assert.rejects(fs.access(path.join(notesDir, 'gone.txt')));
+  });
+
+  it('lists notes sorted, ignoring non-.txt files and directories', async () => {
+    await createNote(notesDir, 'beta', 'b');
+    await createNote(notesDir, 'alpha', 'a');
+    await createNote(notesDir, 'gamma', 'g');
+    await fs.writeFile(path.join(notesDir, 'README.md'), '# not a note');
+    await fs.mkdir(path.join(notesDir, 'subdir'));
+
+    assert.deepEqual(await listNotes(notesDir), ['alpha', 'beta', 'gamma']);
+  });
+
+  it('returns an empty list for a missing directory', async () => {
+    assert.deepEqual(await listNotes(path.join(root, 'does-not-exist')), []);
+  });
+});
+=== END ===
+=== FILE: tsconfig.json ===
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": ".",
+    "outDir": "dist",
+    "strict": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "declaration": false,
+    "sourceMap": false,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "dist", "notes"]
+}
+=== END ===
+
+
+FAILURE
+FAILED (exit 2)
+command: npm run build
+
+> notes@1.0.0 build
+> tsc -p tsconfig.json
+
+src/notes.ts(9,31): error TS2305: Module '"node:fs"' has no exported member 'FileHandle'.
+
+
+Send ONLY the files you change, in full. Output format for source files: for every file write a line `=== FILE: relative/path ===` followed by the complete file content, and finish each file with a line `=== END ===`. Use relative paths only. Do not add markdown fences around file content. Always send complete files, never diffs or fragments.
+The LAST paragraph of your reply must contain exactly these two lines and nothing else, each on its own line:
+build_command: <one command that compiles/type-checks the project; no shell operators>
+test_command: <one command that runs the tests and exits non-zero on failure; no shell operators>

@@ -1,106 +1,164 @@
-import * as fs from 'node:fs';
-import type { Dirent } from 'node:fs';
-import * as path from 'node:path';
-import { DomainError } from './errors';
+/**
+ * The filesystem layer of the note taker.
+ *
+ * This is the only module in the project that touches the filesystem. It never
+ * reads `process.env`: the notes directory is always passed in by the caller,
+ * which keeps the module pure with respect to its I/O targets and trivial to
+ * unit test.
+ */
+import { promises as fs } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
+import path from 'node:path';
 
-const VALID_NAME = /^[A-Za-z0-9_-]+$/;
+import { AppError, FAILURE, USAGE, toAppError } from './errors.js';
 
+/** Allowed note names: 1 to 64 characters of `[A-Za-z0-9_-]`. */
+export const NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Every note is stored as `<name>.txt`. */
+export const EXTENSION = '.txt';
+
+function isErrno(error: unknown, ...codes: string[]): boolean {
+  const code = (error as NodeJS.ErrnoException | null | undefined)?.code;
+  return typeof code === 'string' && codes.includes(code);
+}
+
+/**
+ * The security boundary: validation happens *before* any path is built.
+ * Empty names, `.`, `..`, slashes, dots, spaces, NUL bytes, ... all fail here.
+ */
 export function validateName(name: string): void {
-  if (!VALID_NAME.test(name)) {
-    throw new DomainError(`Invalid note name: ${name}`);
+  if (typeof name !== 'string' || !NAME_PATTERN.test(name)) {
+    throw new AppError(`invalid note name: ${JSON.stringify(name)}`, USAGE);
   }
 }
 
-export function getNotePath(notesDir: string, name: string): string {
+/**
+ * Builds the absolute path of a note. As defence in depth the joined path is
+ * checked to still live directly inside the notes directory.
+ */
+export function resolvePath(notesDir: string, name: string): string {
   validateName(name);
-  return path.join(notesDir, `${name}.txt`);
-}
-
-export function ensureNotesDir(notesDir: string): void {
-  try {
-    fs.mkdirSync(notesDir, { recursive: true });
-  } catch (error) {
-    throw new DomainError(`Failed to create notes directory: ${errorMessage(error)}`);
+  const base = path.resolve(notesDir);
+  const file = path.join(base, `${name}${EXTENSION}`);
+  if (path.dirname(file) !== base) {
+    throw new AppError('internal error: resolved path escapes the notes directory', FAILURE);
   }
+  return file;
 }
 
-export function createNote(notesDir: string, name: string, text: string): void {
-  const filePath = getNotePath(notesDir, name);
-  ensureNotesDir(notesDir);
-
+/**
+ * Verifies that `notesDir` is usable: it either does not exist yet (it is
+ * created lazily on the first write) or it is a directory.
+ */
+export async function assertUsableDir(notesDir: string): Promise<void> {
+  const base = path.resolve(notesDir);
+  let stats;
   try {
-    fs.writeFileSync(filePath, text, { encoding: 'utf8', flag: 'wx' });
+    stats = await fs.stat(base);
   } catch (error) {
-    if (isNodeError(error) && error.code === 'EEXIST') {
-      throw new DomainError(`Note already exists: ${name}`);
+    if (isErrno(error, 'ENOENT')) {
+      return;
     }
-    throw new DomainError(`Failed to create note: ${errorMessage(error)}`);
+    throw toAppError(error);
+  }
+  if (!stats.isDirectory()) {
+    throw new AppError(`notes directory is not a directory: ${notesDir}`, USAGE);
   }
 }
 
-export function overwriteNote(notesDir: string, name: string, text: string): void {
-  const filePath = getNotePath(notesDir, name);
-  ensureNotesDir(notesDir);
-
-  if (!fs.existsSync(filePath)) {
-    throw new DomainError(`Note not found: ${name}`);
-  }
-
+async function ensureDir(dir: string): Promise<void> {
   try {
-    fs.writeFileSync(filePath, text, { encoding: 'utf8' });
+    await fs.mkdir(dir, { recursive: true });
   } catch (error) {
-    throw new DomainError(`Failed to overwrite note: ${errorMessage(error)}`);
+    throw toAppError(error);
   }
 }
 
-export function showNote(notesDir: string, name: string): string {
-  const filePath = getNotePath(notesDir, name);
+function notFound(error: unknown, name: string): AppError {
+  if (isErrno(error, 'ENOENT')) {
+    return new AppError(`note not found: ${name}`, FAILURE);
+  }
+  return toAppError(error);
+}
 
+async function openExisting(file: string, name: string): Promise<FileHandle> {
   try {
-    return fs.readFileSync(filePath, 'utf8');
+    return await fs.open(file, 'r+');
   } catch (error) {
-    if (isNodeError(error) && error.code === 'ENOENT') {
-      throw new DomainError(`Note not found: ${name}`);
+    throw notFound(error, name);
+  }
+}
+
+/** Writes `<name>.txt`; fails if the note already exists. */
+export async function createNote(notesDir: string, name: string, text: string): Promise<void> {
+  const file = resolvePath(notesDir, name);
+  await ensureDir(path.dirname(file));
+  try {
+    await fs.writeFile(file, text, { encoding: 'utf8', flag: 'wx' });
+  } catch (error) {
+    if (isErrno(error, 'EEXIST')) {
+      throw new AppError(`note already exists: ${name}`, FAILURE);
     }
-    throw new DomainError(`Failed to read note: ${errorMessage(error)}`);
+    throw toAppError(error);
   }
 }
 
-export function deleteNote(notesDir: string, name: string): void {
-  const filePath = getNotePath(notesDir, name);
-
+/** Replaces an existing note; fails if the note is missing. */
+export async function overwriteNote(
+  notesDir: string,
+  name: string,
+  text: string,
+): Promise<void> {
+  const file = resolvePath(notesDir, name);
+  const handle = await openExisting(file, name);
   try {
-    fs.unlinkSync(filePath);
+    await handle.truncate(0);
+    await handle.write(text, 0, 'utf8');
   } catch (error) {
-    if (isNodeError(error) && error.code === 'ENOENT') {
-      throw new DomainError(`Note not found: ${name}`);
-    }
-    throw new DomainError(`Failed to delete note: ${errorMessage(error)}`);
+    throw toAppError(error);
+  } finally {
+    await handle.close();
   }
 }
 
-export function listNotes(notesDir: string): string[] {
-  let entries: Dirent[];
-
+/** Reads the raw bytes of a note; fails if the note is missing. */
+export async function readNote(notesDir: string, name: string): Promise<Buffer> {
+  const file = resolvePath(notesDir, name);
   try {
-    entries = fs.readdirSync(notesDir, { withFileTypes: true });
+    return await fs.readFile(file);
   } catch (error) {
-    if (isNodeError(error) && error.code === 'ENOENT') {
+    throw notFound(error, name);
+  }
+}
+
+/**
+ * Lists note names (without extension), sorted. Non-`.txt` entries and
+ * directories are ignored, and a missing directory simply lists nothing.
+ */
+export async function listNotes(notesDir: string): Promise<string[]> {
+  const base = path.resolve(notesDir);
+  let entries;
+  try {
+    entries = await fs.readdir(base, { withFileTypes: true });
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) {
       return [];
     }
-    throw new DomainError(`Failed to list notes: ${errorMessage(error)}`);
+    throw toAppError(error);
   }
-
   return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.txt'))
-    .map((entry) => entry.name.slice(0, -'.txt'.length))
+    .filter((entry) => entry.isFile() && entry.name.endsWith(EXTENSION))
+    .map((entry) => entry.name.slice(0, -EXTENSION.length))
     .sort();
 }
 
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return typeof error === 'object' && error !== null && 'code' in error;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+/** Removes a note; fails if the note is missing. */
+export async function deleteNote(notesDir: string, name: string): Promise<void> {
+  const file = resolvePath(notesDir, name);
+  try {
+    await fs.unlink(file);
+  } catch (error) {
+    throw notFound(error, name);
+  }
 }

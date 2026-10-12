@@ -1,782 +1,804 @@
 === FILE: package.json ===
 {
-  "name": "notes-cli",
+  "name": "notes",
   "version": "1.0.0",
   "private": true,
-  "type": "commonjs",
+  "description": "A tiny TypeScript CLI note taker backed by plain .txt files",
+  "type": "module",
   "bin": {
-    "notes": "dist/cli.js"
+    "notes": "dist/src/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "tsx --test test/*.test.ts"
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/src/cli.js",
+    "dev": "tsx src/cli.ts",
+    "test": "node --import tsx --test test/notes.test.ts test/cli.test.ts",
+    "test:dist": "npm run build && node --test dist/test"
   },
   "devDependencies": {
-    "@types/node": "^20.11.30",
-    "tsx": "^4.7.1",
-    "typescript": "^5.4.3"
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20.6.0"
   }
 }
 === END ===
+
 === FILE: tsconfig.json ===
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "CommonJS",
-    "moduleResolution": "Node",
-    "rootDir": "src",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": ".",
     "outDir": "dist",
     "strict": true,
-    "esModuleInterop": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
     "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
     "skipLibCheck": true,
-    "types": ["node"],
-    "sourceMap": true
+    "declaration": false,
+    "sourceMap": false,
+    "types": ["node"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "dist", "notes"]
 }
 === END ===
-=== FILE: src/errors.ts ===
-export class AppError extends Error {
-  public readonly exitCode: number;
 
-  constructor(message: string, exitCode: number) {
+=== FILE: .gitignore ===
+dist/
+notes/
+node_modules/
+=== END ===
+
+=== FILE: src/errors.ts ===
+/**
+ * Error plumbing for the whole CLI.
+ *
+ * Every failure path funnels through `AppError`; only `cli.ts` translates it
+ * into a stderr line plus `process.exitCode`.
+ */
+
+/** Wrong usage: bad arguments, unknown commands, an unusable NOTES_DIR. */
+export const USAGE = 2;
+
+/** Runtime failures: missing notes, filesystem errors, ... */
+export const FAILURE = 1;
+
+export class AppError extends Error {
+  readonly exitCode: number;
+
+  constructor(message: string, exitCode: number = FAILURE) {
     super(message);
     this.name = 'AppError';
     this.exitCode = exitCode;
-    Object.setPrototypeOf(this, AppError.prototype);
   }
 }
 
-export class UsageError extends AppError {
-  constructor(message: string) {
-    super(message, 2);
-    this.name = 'UsageError';
-    Object.setPrototypeOf(this, UsageError.prototype);
+/** Normalises anything thrown into an `AppError` (defaulting to exit code 1). */
+export function toAppError(error: unknown): AppError {
+  if (error instanceof AppError) {
+    return error;
   }
-}
-
-export class DomainError extends AppError {
-  constructor(message: string) {
-    super(message, 1);
-    this.name = 'DomainError';
-    Object.setPrototypeOf(this, DomainError.prototype);
+  if (error instanceof Error) {
+    return new AppError(error.message, FAILURE);
   }
+  return new AppError(String(error), FAILURE);
 }
 === END ===
-=== FILE: src/args.ts ===
-import { UsageError } from './errors';
 
-export type ParsedCommand =
-  | { command: 'create'; name: string; text?: string }
-  | { command: 'overwrite'; name: string; text?: string }
-  | { command: 'show'; name: string }
-  | { command: 'delete'; name: string }
-  | { command: 'list' };
-
-export function parseArgs(argv: string[]): ParsedCommand {
-  const [command, name, text, ...rest] = argv;
-
-  if (command === undefined) {
-    throw new UsageError('Missing command');
-  }
-
-  switch (command) {
-    case 'create':
-      if (name === undefined) {
-        throw new UsageError('Missing name for create');
-      }
-      if (rest.length > 0) {
-        throw new UsageError('Too many arguments for create');
-      }
-      return { command: 'create', name, text };
-
-    case 'overwrite':
-      if (name === undefined) {
-        throw new UsageError('Missing name for overwrite');
-      }
-      if (rest.length > 0) {
-        throw new UsageError('Too many arguments for overwrite');
-      }
-      return { command: 'overwrite', name, text };
-
-    case 'show':
-      if (name === undefined) {
-        throw new UsageError('Missing name for show');
-      }
-      if (text !== undefined || rest.length > 0) {
-        throw new UsageError('Too many arguments for show');
-      }
-      return { command: 'show', name };
-
-    case 'delete':
-      if (name === undefined) {
-        throw new UsageError('Missing name for delete');
-      }
-      if (text !== undefined || rest.length > 0) {
-        throw new UsageError('Too many arguments for delete');
-      }
-      return { command: 'delete', name };
-
-    case 'list':
-      if (name !== undefined || text !== undefined || rest.length > 0) {
-        throw new UsageError('Too many arguments for list');
-      }
-      return { command: 'list' };
-
-    default:
-      throw new UsageError(`Unknown command: ${command}`);
-  }
-}
-=== END ===
-=== FILE: src/config.ts ===
-import * as path from 'node:path';
-
-export function getNotesDir(
-  env: NodeJS.ProcessEnv = process.env,
-  cwd: string = process.cwd()
-): string {
-  const configured = env.NOTES_DIR ?? './notes';
-  return path.resolve(cwd, configured);
-}
-=== END ===
-=== FILE: src/io.ts ===
-export async function readStdin(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = '';
-
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (chunk: Buffer | string) => {
-      data += chunk.toString();
-    });
-    process.stdin.on('end', () => {
-      resolve(data);
-    });
-    process.stdin.on('error', (error) => {
-      reject(error);
-    });
-  });
-}
-=== END ===
 === FILE: src/notes.ts ===
-import * as fs from 'node:fs';
-import type { Dirent } from 'node:fs';
-import * as path from 'node:path';
-import { DomainError } from './errors';
+/**
+ * The filesystem layer of the note taker.
+ *
+ * This is the only module in the project that touches the filesystem. It never
+ * reads `process.env`: the notes directory is always passed in by the caller,
+ * which keeps the module pure with respect to its I/O targets and trivial to
+ * unit test.
+ */
+import { promises as fs, type FileHandle } from 'node:fs';
+import path from 'node:path';
 
-const VALID_NAME = /^[A-Za-z0-9_-]+$/;
+import { AppError, FAILURE, USAGE, toAppError } from './errors.js';
 
+/** Allowed note names: 1 to 64 characters of `[A-Za-z0-9_-]`. */
+export const NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Every note is stored as `<name>.txt`. */
+export const EXTENSION = '.txt';
+
+function isErrno(error: unknown, ...codes: string[]): boolean {
+  const code = (error as NodeJS.ErrnoException | null | undefined)?.code;
+  return typeof code === 'string' && codes.includes(code);
+}
+
+/**
+ * The security boundary: validation happens *before* any path is built.
+ * Empty names, `.`, `..`, slashes, dots, spaces, NUL bytes, ... all fail here.
+ */
 export function validateName(name: string): void {
-  if (!VALID_NAME.test(name)) {
-    throw new DomainError(`Invalid note name: ${name}`);
+  if (typeof name !== 'string' || !NAME_PATTERN.test(name)) {
+    throw new AppError(`invalid note name: ${JSON.stringify(name)}`, USAGE);
   }
 }
 
-export function getNotePath(notesDir: string, name: string): string {
+/**
+ * Builds the absolute path of a note. As defence in depth the joined path is
+ * checked to still live directly inside the notes directory.
+ */
+export function resolvePath(notesDir: string, name: string): string {
   validateName(name);
-  return path.join(notesDir, `${name}.txt`);
-}
-
-export function ensureNotesDir(notesDir: string): void {
-  try {
-    fs.mkdirSync(notesDir, { recursive: true });
-  } catch (error) {
-    throw new DomainError(`Failed to create notes directory: ${errorMessage(error)}`);
+  const base = path.resolve(notesDir);
+  const file = path.join(base, `${name}${EXTENSION}`);
+  if (path.dirname(file) !== base) {
+    throw new AppError('internal error: resolved path escapes the notes directory', FAILURE);
   }
+  return file;
 }
 
-export function createNote(notesDir: string, name: string, text: string): void {
-  const filePath = getNotePath(notesDir, name);
-  ensureNotesDir(notesDir);
-
+/**
+ * Verifies that `notesDir` is usable: it either does not exist yet (it is
+ * created lazily on the first write) or it is a directory.
+ */
+export async function assertUsableDir(notesDir: string): Promise<void> {
+  const base = path.resolve(notesDir);
+  let stats;
   try {
-    fs.writeFileSync(filePath, text, { encoding: 'utf8', flag: 'wx' });
+    stats = await fs.stat(base);
   } catch (error) {
-    if (isNodeError(error) && error.code === 'EEXIST') {
-      throw new DomainError(`Note already exists: ${name}`);
+    if (isErrno(error, 'ENOENT')) {
+      return;
     }
-    throw new DomainError(`Failed to create note: ${errorMessage(error)}`);
+    throw toAppError(error);
+  }
+  if (!stats.isDirectory()) {
+    throw new AppError(`notes directory is not a directory: ${notesDir}`, USAGE);
   }
 }
 
-export function overwriteNote(notesDir: string, name: string, text: string): void {
-  const filePath = getNotePath(notesDir, name);
-  ensureNotesDir(notesDir);
-
-  if (!fs.existsSync(filePath)) {
-    throw new DomainError(`Note not found: ${name}`);
-  }
-
+async function ensureDir(dir: string): Promise<void> {
   try {
-    fs.writeFileSync(filePath, text, { encoding: 'utf8' });
+    await fs.mkdir(dir, { recursive: true });
   } catch (error) {
-    throw new DomainError(`Failed to overwrite note: ${errorMessage(error)}`);
+    throw toAppError(error);
   }
 }
 
-export function showNote(notesDir: string, name: string): string {
-  const filePath = getNotePath(notesDir, name);
+function notFound(error: unknown, name: string): AppError {
+  if (isErrno(error, 'ENOENT')) {
+    return new AppError(`note not found: ${name}`, FAILURE);
+  }
+  return toAppError(error);
+}
 
+async function openExisting(file: string, name: string): Promise<FileHandle> {
   try {
-    return fs.readFileSync(filePath, 'utf8');
+    return await fs.open(file, 'r+');
   } catch (error) {
-    if (isNodeError(error) && error.code === 'ENOENT') {
-      throw new DomainError(`Note not found: ${name}`);
+    throw notFound(error, name);
+  }
+}
+
+/** Writes `<name>.txt`; fails if the note already exists. */
+export async function createNote(notesDir: string, name: string, text: string): Promise<void> {
+  const file = resolvePath(notesDir, name);
+  await ensureDir(path.dirname(file));
+  try {
+    await fs.writeFile(file, text, { encoding: 'utf8', flag: 'wx' });
+  } catch (error) {
+    if (isErrno(error, 'EEXIST')) {
+      throw new AppError(`note already exists: ${name}`, FAILURE);
     }
-    throw new DomainError(`Failed to read note: ${errorMessage(error)}`);
+    throw toAppError(error);
   }
 }
 
-export function deleteNote(notesDir: string, name: string): void {
-  const filePath = getNotePath(notesDir, name);
-
+/** Replaces an existing note; fails if the note is missing. */
+export async function overwriteNote(
+  notesDir: string,
+  name: string,
+  text: string,
+): Promise<void> {
+  const file = resolvePath(notesDir, name);
+  const handle = await openExisting(file, name);
   try {
-    fs.unlinkSync(filePath);
+    await handle.truncate(0);
+    await handle.write(text, 0, 'utf8');
   } catch (error) {
-    if (isNodeError(error) && error.code === 'ENOENT') {
-      throw new DomainError(`Note not found: ${name}`);
-    }
-    throw new DomainError(`Failed to delete note: ${errorMessage(error)}`);
+    throw toAppError(error);
+  } finally {
+    await handle.close();
   }
 }
 
-export function listNotes(notesDir: string): string[] {
-  let entries: Dirent[];
-
+/** Reads the raw bytes of a note; fails if the note is missing. */
+export async function readNote(notesDir: string, name: string): Promise<Buffer> {
+  const file = resolvePath(notesDir, name);
   try {
-    entries = fs.readdirSync(notesDir, { withFileTypes: true });
+    return await fs.readFile(file);
   } catch (error) {
-    if (isNodeError(error) && error.code === 'ENOENT') {
+    throw notFound(error, name);
+  }
+}
+
+/**
+ * Lists note names (without extension), sorted. Non-`.txt` entries and
+ * directories are ignored, and a missing directory simply lists nothing.
+ */
+export async function listNotes(notesDir: string): Promise<string[]> {
+  const base = path.resolve(notesDir);
+  let entries;
+  try {
+    entries = await fs.readdir(base, { withFileTypes: true });
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) {
       return [];
     }
-    throw new DomainError(`Failed to list notes: ${errorMessage(error)}`);
+    throw toAppError(error);
   }
-
   return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.txt'))
-    .map((entry) => entry.name.slice(0, -'.txt'.length))
+    .filter((entry) => entry.isFile() && entry.name.endsWith(EXTENSION))
+    .map((entry) => entry.name.slice(0, -EXTENSION.length))
     .sort();
 }
 
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return typeof error === 'object' && error !== null && 'code' in error;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-=== END ===
-=== FILE: src/commands.ts ===
-import type { ParsedCommand } from './args';
-import { readStdin } from './io';
-import {
-  createNote,
-  deleteNote,
-  listNotes,
-  overwriteNote,
-  showNote,
-} from './notes';
-
-export interface CommandDependencies {
-  notesDir: string;
-  stdout: { write(chunk: string): unknown };
-  readStdin?: () => Promise<string>;
-}
-
-export async function runCommand(
-  command: ParsedCommand,
-  dependencies: CommandDependencies
-): Promise<void> {
-  const { notesDir, stdout } = dependencies;
-  const read = dependencies.readStdin ?? readStdin;
-
-  switch (command.command) {
-    case 'create': {
-      const text = command.text ?? (await read());
-      createNote(notesDir, command.name, text);
-      return;
-    }
-
-    case 'overwrite': {
-      const text = command.text ?? (await read());
-      overwriteNote(notesDir, command.name, text);
-      return;
-    }
-
-    case 'show': {
-      const content = showNote(notesDir, command.name);
-      stdout.write(content);
-      return;
-    }
-
-    case 'delete': {
-      deleteNote(notesDir, command.name);
-      return;
-    }
-
-    case 'list': {
-      const names = listNotes(notesDir);
-      if (names.length > 0) {
-        stdout.write(`${names.join('\n')}\n`);
-      }
-      return;
-    }
-  }
-}
-=== END ===
-=== FILE: src/cli.ts ===
-import { parseArgs } from './args';
-import { runCommand } from './commands';
-import { getNotesDir } from './config';
-import { AppError } from './errors';
-import { readStdin } from './io';
-
-export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
+/** Removes a note; fails if the note is missing. */
+export async function deleteNote(notesDir: string, name: string): Promise<void> {
+  const file = resolvePath(notesDir, name);
   try {
-    const command = parseArgs(argv);
-    const notesDir = getNotesDir();
-
-    await runCommand(command, {
-      notesDir,
-      stdout: process.stdout,
-      readStdin,
-    });
-
-    return 0;
+    await fs.unlink(file);
   } catch (error) {
-    if (error instanceof AppError) {
-      process.stderr.write(`${error.message}\n`);
-      return error.exitCode;
-    }
-
-    const message =
-      error instanceof Error ? error.stack ?? error.message : String(error);
-    process.stderr.write(`${message}\n`);
-    return 1;
+    throw notFound(error, name);
   }
 }
-
-if (require.main === module) {
-  void main().then((exitCode) => {
-    process.exitCode = exitCode;
-  });
-}
 === END ===
-=== FILE: test/notes.test.ts ===
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
+
+=== FILE: src/commands.ts ===
+/**
+ * Command implementations.
+ *
+ * One function per command: it maps positional arguments (and optionally
+ * stdin) onto the filesystem layer in `notes.ts`, decides what reaches stdout
+ * and turns missing-input cases into `AppError`s.
+ */
+import { AppError, USAGE } from './errors.js';
 import {
   createNote,
   deleteNote,
   listNotes,
   overwriteNote,
-  showNote,
+  readNote,
   validateName,
-} from '../src/notes';
+} from './notes.js';
 
-function tempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'notes-cli-notes-'));
+/** Everything a command needs from its environment. */
+export interface CommandIO {
+  /** Directory holding the notes (absolute or relative to the process cwd). */
+  notesDir: string;
+  /** Resolves with everything read from stdin, decoded as UTF-8. */
+  readStdin: () => Promise<string>;
+  /** Writes to stdout, verbatim. */
+  write: (data: string | Uint8Array) => void;
 }
 
-test('validateName accepts valid names', () => {
-  for (const name of ['a', 'A', '0', 'foo-bar', 'foo_bar', 'abc123']) {
-    assert.doesNotThrow(() => validateName(name));
+export type Command = (io: CommandIO, args: string[]) => Promise<void>;
+
+function checkArity(usage: string, args: string[], min: number, max: number): void {
+  if (args.length < min || args.length > max) {
+    throw new AppError(`usage: ${usage}`, USAGE);
   }
-});
+}
 
-test('validateName rejects invalid names', () => {
-  for (const name of ['', '..', 'a/b', 'a\\b', 'a b', 'a.b', 'é', 'a$']) {
-    assert.throws(() => validateName(name), /Invalid note name/);
+/** The `[text]` argument, or stdin when it was left out. */
+async function noteText(io: CommandIO, args: string[], index: number): Promise<string> {
+  if (args.length > index) {
+    return args[index];
   }
-});
+  return io.readStdin();
+}
 
-test('notes CRUD against a temp directory', () => {
-  const dir = tempDir();
-  try {
-    createNote(dir, 'alpha', 'one');
-    assert.equal(showNote(dir, 'alpha'), 'one');
-    assert.deepEqual(listNotes(dir), ['alpha']);
+export const create: Command = async (io, args) => {
+  checkArity('create <name> [text]', args, 1, 2);
+  const name = args[0];
+  validateName(name);
+  const text = await noteText(io, args, 1);
+  await createNote(io.notesDir, name, text);
+};
 
-    overwriteNote(dir, 'alpha', 'two');
-    assert.equal(showNote(dir, 'alpha'), 'two');
-
-    deleteNote(dir, 'alpha');
-    assert.deepEqual(listNotes(dir), []);
-    assert.throws(() => showNote(dir, 'alpha'), /Note not found/);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+export const list: Command = async (io, args) => {
+  checkArity('list', args, 0, 0);
+  const names = await listNotes(io.notesDir);
+  if (names.length > 0) {
+    io.write(`${names.join('\n')}\n`);
   }
-});
+};
 
-test('listNotes ignores non-txt files and sorts names', () => {
-  const dir = tempDir();
-  try {
-    fs.writeFileSync(path.join(dir, 'b.txt'), 'b');
-    fs.writeFileSync(path.join(dir, 'a.txt'), 'a');
-    fs.writeFileSync(path.join(dir, 'c.md'), 'c');
-    fs.mkdirSync(path.join(dir, 'd.txt'));
+export const show: Command = async (io, args) => {
+  checkArity('show <name>', args, 1, 1);
+  const name = args[0];
+  validateName(name);
+  io.write(await readNote(io.notesDir, name));
+};
 
-    assert.deepEqual(listNotes(dir), ['a', 'b']);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
+export const overwrite: Command = async (io, args) => {
+  checkArity('overwrite <name> [text]', args, 1, 2);
+  const name = args[0];
+  validateName(name);
+  const text = await noteText(io, args, 1);
+  await overwriteNote(io.notesDir, name, text);
+};
 
-test('listNotes returns empty for missing directory', () => {
-  const dir = tempDir();
-  try {
-    assert.deepEqual(listNotes(path.join(dir, 'missing')), []);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
+export const deleteCommand: Command = async (io, args) => {
+  checkArity('delete <name>', args, 1, 1);
+  const name = args[0];
+  validateName(name);
+  await deleteNote(io.notesDir, name);
+};
 
-test('createNote errors when note already exists', () => {
-  const dir = tempDir();
-  try {
-    createNote(dir, 'alpha', 'one');
-    assert.throws(() => createNote(dir, 'alpha', 'two'), /Note already exists/);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('overwriteNote errors when note is missing', () => {
-  const dir = tempDir();
-  try {
-    assert.throws(() => overwriteNote(dir, 'missing', 'x'), /Note not found/);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('deleteNote errors when note is missing', () => {
-  const dir = tempDir();
-  try {
-    assert.throws(() => deleteNote(dir, 'missing'), /Note not found/);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
+/** Command word -> implementation. */
+export const commands = new Map<string, Command>([
+  ['create', create],
+  ['list', list],
+  ['show', show],
+  ['overwrite', overwrite],
+  ['delete', deleteCommand],
+]);
 === END ===
-=== FILE: test/commands.test.ts ===
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
-import { runCommand } from '../src/commands';
 
-function tempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'notes-cli-commands-'));
+=== FILE: src/cli.ts ===
+#!/usr/bin/env node
+/**
+ * Entry point.
+ *
+ * Parses `process.argv`, resolves the notes directory from `NOTES_DIR`
+ * (default `./notes`), supplies the stdin reader, dispatches to a command and
+ * turns any `AppError` into a single stderr line plus a non-zero exit code.
+ */
+import process from 'node:process';
+
+import { commands, type CommandIO } from './commands.js';
+import { AppError, USAGE, toAppError } from './errors.js';
+import { assertUsableDir } from './notes.js';
+
+/** Used when `NOTES_DIR` is not set. */
+export const DEFAULT_NOTES_DIR = './notes';
+
+/** Reads `NOTES_DIR`, falling back to `./notes`. */
+export function resolveNotesDir(env: NodeJS.ProcessEnv): string {
+  const configured = env.NOTES_DIR;
+  if (configured === undefined) {
+    return DEFAULT_NOTES_DIR;
+  }
+  if (configured.trim() === '') {
+    throw new AppError('NOTES_DIR is empty', USAGE);
+  }
+  return configured;
 }
 
-function memoryStdout() {
-  let output = '';
+/** Reads stdin to EOF; an interactive TTY counts as "no input". */
+async function readStdin(): Promise<string> {
+  if (process.stdin.isTTY) {
+    return '';
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer));
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
 
-  return {
-    write(chunk: string) {
-      output += chunk;
-      return true;
-    },
-    get output() {
-      return output;
+async function main(argv: string[]): Promise<void> {
+  const [command, ...args] = argv;
+  if (command === undefined) {
+    throw new AppError('missing command', USAGE);
+  }
+  const handler = commands.get(command);
+  if (handler === undefined) {
+    throw new AppError(`unknown command: ${command}`, USAGE);
+  }
+
+  const notesDir = resolveNotesDir(process.env);
+  await assertUsableDir(notesDir);
+
+  const io: CommandIO = {
+    notesDir,
+    readStdin,
+    write: (data: string | Uint8Array): void => {
+      process.stdout.write(data);
     },
   };
+
+  await handler(io, args);
 }
 
-test('runCommand create writes a note', async () => {
-  const dir = tempDir();
-  try {
-    const stdout = memoryStdout();
-    await runCommand(
-      { command: 'create', name: 'alpha', text: 'hello' },
-      { notesDir: dir, stdout }
-    );
-
-    assert.equal(fs.readFileSync(path.join(dir, 'alpha.txt'), 'utf8'), 'hello');
-    assert.equal(stdout.output, '');
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('runCommand create errors when note exists', async () => {
-  const dir = tempDir();
-  try {
-    await runCommand(
-      { command: 'create', name: 'alpha', text: 'one' },
-      { notesDir: dir, stdout: memoryStdout() }
-    );
-
-    await assert.rejects(
-      runCommand(
-        { command: 'create', name: 'alpha', text: 'two' },
-        { notesDir: dir, stdout: memoryStdout() }
-      ),
-      /Note already exists/
-    );
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('runCommand overwrite errors when note is missing', async () => {
-  const dir = tempDir();
-  try {
-    await assert.rejects(
-      runCommand(
-        { command: 'overwrite', name: 'missing', text: 'x' },
-        { notesDir: dir, stdout: memoryStdout() }
-      ),
-      /Note not found/
-    );
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('runCommand delete errors when note is missing', async () => {
-  const dir = tempDir();
-  try {
-    await assert.rejects(
-      runCommand(
-        { command: 'delete', name: 'missing' },
-        { notesDir: dir, stdout: memoryStdout() }
-      ),
-      /Note not found/
-    );
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('runCommand uses stdin text when text argument is absent', async () => {
-  const dir = tempDir();
-  try {
-    await runCommand(
-      { command: 'create', name: 'stdin-note' },
-      {
-        notesDir: dir,
-        stdout: memoryStdout(),
-        readStdin: async () => 'from stdin',
-      }
-    );
-
-    assert.equal(
-      fs.readFileSync(path.join(dir, 'stdin-note.txt'), 'utf8'),
-      'from stdin'
-    );
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('runCommand list prints sorted names one per line', async () => {
-  const dir = tempDir();
-  try {
-    await runCommand(
-      { command: 'create', name: 'b', text: 'b' },
-      { notesDir: dir, stdout: memoryStdout() }
-    );
-    await runCommand(
-      { command: 'create', name: 'a', text: 'a' },
-      { notesDir: dir, stdout: memoryStdout() }
-    );
-
-    const stdout = memoryStdout();
-    await runCommand({ command: 'list' }, { notesDir: dir, stdout });
-
-    assert.equal(stdout.output, 'a\nb\n');
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('runCommand list on missing directory prints nothing', async () => {
-  const dir = tempDir();
-  try {
-    const stdout = memoryStdout();
-    await runCommand(
-      { command: 'list' },
-      { notesDir: path.join(dir, 'missing'), stdout }
-    );
-
-    assert.equal(stdout.output, '');
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('runCommand show prints note content', async () => {
-  const dir = tempDir();
-  try {
-    await runCommand(
-      { command: 'create', name: 'alpha', text: 'hello' },
-      { notesDir: dir, stdout: memoryStdout() }
-    );
-
-    const stdout = memoryStdout();
-    await runCommand(
-      { command: 'show', name: 'alpha' },
-      { notesDir: dir, stdout }
-    );
-
-    assert.equal(stdout.output, 'hello');
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+main(process.argv.slice(2)).catch((error: unknown) => {
+  const appError = toAppError(error);
+  const message = appError.message.replace(/[\r\n]+/g, ' ');
+  process.stderr.write(`error: ${message}\n`);
+  process.exitCode = appError.exitCode;
 });
 === END ===
-=== FILE: test/cli.test.ts ===
-import test from 'node:test';
+
+=== FILE: test/notes.test.ts ===
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 
-const cliPath = path.resolve(process.cwd(), 'src/cli.ts');
-const tsxCli = path.resolve(
-  process.cwd(),
-  'node_modules',
-  'tsx',
-  'dist',
-  'cli.mjs'
-);
+import { AppError, FAILURE, USAGE } from '../src/errors.js';
+import {
+  createNote,
+  deleteNote,
+  listNotes,
+  overwriteNote,
+  readNote,
+  resolvePath,
+  validateName,
+} from '../src/notes.js';
 
-function runCli(
-  args: string[],
-  options: { input?: string; env?: NodeJS.ProcessEnv } = {}
-) {
-  return spawnSync(process.execPath, [tsxCli, cliPath, ...args], {
-    input: options.input,
-    encoding: 'utf8',
-    env: { ...process.env, ...options.env },
+function exitedWith(code: number): (error: unknown) => boolean {
+  return (error: unknown): boolean => error instanceof AppError && error.exitCode === code;
+}
+
+describe('validateName', () => {
+  const accepted = ['a', 'A_1', 'my-note', 'x'.repeat(64)];
+
+  for (const name of accepted) {
+    it(`accepts ${JSON.stringify(name.length > 20 ? `${name.slice(0, 16)}...` : name)}`, () => {
+      assert.doesNotThrow(() => {
+        validateName(name);
+      });
+    });
+  }
+
+  const rejected: Array<[string, string]> = [
+    ['empty string', ''],
+    ['a single dot', '.'],
+    ['double dots', '..'],
+    ['parent traversal', '../x'],
+    ['a forward slash', 'a/b'],
+    ['a backslash', 'a\\b'],
+    ['a space', 'a b'],
+    ['a .txt extension', 'a.txt'],
+    ['a dot in the middle', 'a.b'],
+    ['65 characters', 'x'.repeat(65)],
+    ['a NUL byte', 'a\u0000b'],
+  ];
+
+  for (const [label, name] of rejected) {
+    it(`rejects ${label}`, () => {
+      assert.throws(() => {
+        validateName(name);
+      }, exitedWith(USAGE));
+    });
+  }
+});
+
+describe('notes filesystem layer', () => {
+  let root = '';
+  let notesDir = '';
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'notes-unit-'));
+    notesDir = path.join(root, 'notes');
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('resolves note paths inside the notes directory', () => {
+    const dir = path.resolve('/tmp/notes');
+    assert.equal(resolvePath(dir, 'a'), path.join(dir, 'a.txt'));
+  });
+
+  it('refuses a traversal name and leaves the parent directory untouched', async () => {
+    await assert.rejects(createNote(notesDir, '../secret', 'nope'), exitedWith(USAGE));
+    assert.throws(() => resolvePath(notesDir, '../secret'), exitedWith(USAGE));
+    assert.deepEqual(await fs.readdir(root), []);
+  });
+
+  it('creates the notes directory lazily and writes the content', async () => {
+    await createNote(notesDir, 'grocery', 'milk\n');
+    const file = path.join(notesDir, 'grocery.txt');
+    assert.equal(await fs.readFile(file, 'utf8'), 'milk\n');
+  });
+
+  it('fails with code 1 when the note already exists', async () => {
+    await createNote(notesDir, 'grocery', 'milk');
+    await assert.rejects(createNote(notesDir, 'grocery', 'bread'), exitedWith(FAILURE));
+    assert.equal(await fs.readFile(path.join(notesDir, 'grocery.txt'), 'utf8'), 'milk');
+  });
+
+  it('reads back exactly the bytes that were written', async () => {
+    const text = 'héllo\n\nwörld\n';
+    await createNote(notesDir, 'unicode', text);
+    const data = await readNote(notesDir, 'unicode');
+    assert.equal(Buffer.compare(data, Buffer.from(text, 'utf8')), 0);
+  });
+
+  it('fails with code 1 when showing a missing note', async () => {
+    await assert.rejects(readNote(notesDir, 'ghost'), exitedWith(FAILURE));
+  });
+
+  it('overwrites a note exactly, and fails with code 1 when it is missing', async () => {
+    await assert.rejects(overwriteNote(notesDir, 'ghost', 'x'), exitedWith(FAILURE));
+
+    await createNote(notesDir, 'note', 'a much longer original body\n');
+    await overwriteNote(notesDir, 'note', 'short\n');
+    assert.equal(await fs.readFile(path.join(notesDir, 'note.txt'), 'utf8'), 'short\n');
+  });
+
+  it('deletes a note, and fails with code 1 when it is missing', async () => {
+    await assert.rejects(deleteNote(notesDir, 'ghost'), exitedWith(FAILURE));
+
+    await createNote(notesDir, 'gone', 'bye');
+    await deleteNote(notesDir, 'gone');
+    await assert.rejects(fs.access(path.join(notesDir, 'gone.txt')));
+  });
+
+  it('lists notes sorted, ignoring non-.txt files and directories', async () => {
+    await createNote(notesDir, 'beta', 'b');
+    await createNote(notesDir, 'alpha', 'a');
+    await createNote(notesDir, 'gamma', 'g');
+    await fs.writeFile(path.join(notesDir, 'README.md'), '# not a note');
+    await fs.mkdir(path.join(notesDir, 'subdir'));
+
+    assert.deepEqual(await listNotes(notesDir), ['alpha', 'beta', 'gamma']);
+  });
+
+  it('returns an empty list for a missing directory', async () => {
+    assert.deepEqual(await listNotes(path.join(root, 'does-not-exist')), []);
+  });
+});
+=== END ===
+
+=== FILE: test/cli.test.ts ===
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+const testDir = path.dirname(fileURLToPath(import.meta.url));
+const projectRoot = path.resolve(testDir, '..');
+const compiled = path.basename(projectRoot) === 'dist';
+
+const cliPath = path.join(projectRoot, 'src', compiled ? 'cli.js' : 'cli.ts');
+const cliArgs = compiled ? [cliPath] : ['--import', 'tsx', cliPath];
+
+interface RunOptions {
+  notesDir: string;
+  input?: string;
+}
+
+interface RunResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** Spawns the CLI and always closes its stdin so it can never wait forever. */
+function run(args: string[], options: RunOptions): Promise<RunResult> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      process.execPath,
+      [...cliArgs, ...args],
+      {
+        cwd: projectRoot,
+        encoding: 'utf8',
+        env: { ...process.env, NOTES_DIR: options.notesDir },
+      },
+      (error, stdout, stderr) => {
+        const code =
+          error === null ? 0 : typeof error.code === 'number' ? error.code : undefined;
+        if (code === undefined) {
+          reject(error);
+          return;
+        }
+        resolve({ code, stdout: String(stdout), stderr: String(stderr) });
+      },
+    );
+
+    child.stdin?.on('error', () => {
+      /* the child may exit before reading its stdin */
+    });
+    child.stdin?.end(options.input ?? '');
   });
 }
 
-function tempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'notes-cli-cli-'));
+async function readNoteFile(notesDir: string, name: string): Promise<string> {
+  return fs.readFile(path.join(notesDir, `${name}.txt`), 'utf8');
 }
 
-test('cli create/list/show/overwrite/delete', () => {
-  const dir = tempDir();
-  const env = { NOTES_DIR: dir };
+describe('cli', () => {
+  let root = '';
+  let notesDir = '';
 
-  try {
-    let result = runCli(['create', 'alpha', 'hello'], { env });
-    assert.equal(result.status, 0);
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'notes-cli-'));
+    notesDir = path.join(root, 'notes');
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('exits 2 with a single stderr line when no command is given', async () => {
+    const result = await run([], { notesDir });
+    assert.equal(result.code, 2);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /^error: .*\n$/);
+  });
+
+  it('exits 2 for an unknown command', async () => {
+    const result = await run(['frobnicate'], { notesDir });
+    assert.equal(result.code, 2);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /^error: unknown command: frobnicate\n$/);
+  });
+
+  it('exits 2 for wrong arity', async () => {
+    const cases: string[][] = [
+      ['create'],
+      ['create', 'a', 'b', 'c'],
+      ['list', 'extra'],
+      ['show'],
+      ['show', 'a', 'b'],
+      ['overwrite'],
+      ['overwrite', 'a', 'b', 'c'],
+      ['delete'],
+      ['delete', 'a', 'b'],
+    ];
+    for (const args of cases) {
+      const result = await run(args, { notesDir });
+      assert.equal(result.code, 2, `${args.join(' ')} -> ${result.stderr}`);
+      assert.match(result.stderr, /^error: /);
+      assert.deepEqual(await fs.readdir(root), []);
+    }
+  });
+
+  it('exits 2 when NOTES_DIR is not a directory', async () => {
+    const filePath = path.join(root, 'notes-file');
+    await fs.writeFile(filePath, 'not a directory');
+    const result = await run(['list'], { notesDir: filePath });
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /not a directory/);
+  });
+
+  it('creates a note from an argument without touching stdin', async () => {
+    const result = await run(['create', 'first', 'from argument'], {
+      notesDir,
+      input: 'from stdin',
+    });
+    assert.equal(result.code, 0);
     assert.equal(result.stdout, '');
     assert.equal(result.stderr, '');
+    assert.equal(await readNoteFile(notesDir, 'first'), 'from argument');
+  });
 
-    result = runCli(['list'], { env });
-    assert.equal(result.status, 0);
-    assert.equal(result.stdout, 'alpha\n');
+  it('creates a note from stdin verbatim', async () => {
+    const text = 'line one\nline two\n\n';
+    const result = await run(['create', 'piped'], { notesDir, input: text });
+    assert.equal(result.code, 0);
+    assert.equal(await readNoteFile(notesDir, 'piped'), text);
+  });
 
-    result = runCli(['show', 'alpha'], { env });
-    assert.equal(result.status, 0);
-    assert.equal(result.stdout, 'hello');
+  it('creates an empty note from empty stdin', async () => {
+    const result = await run(['create', 'empty'], { notesDir, input: '' });
+    assert.equal(result.code, 0);
+    assert.equal(await readNoteFile(notesDir, 'empty'), '');
+  });
 
-    result = runCli(['overwrite', 'alpha', 'world'], { env });
-    assert.equal(result.status, 0);
+  it('exits 1 when creating a note that already exists', async () => {
+    await run(['create', 'dup', 'one'], { notesDir });
+    const result = await run(['create', 'dup', 'two'], { notesDir });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /^error: note already exists: dup\n$/);
+    assert.equal(await readNoteFile(notesDir, 'dup'), 'one');
+  });
 
-    result = runCli(['show', 'alpha'], { env });
-    assert.equal(result.status, 0);
-    assert.equal(result.stdout, 'world');
+  it('exits 2 for an invalid name without creating anything', async () => {
+    const result = await run(['create', '../escape', 'nope'], {
+      notesDir,
+      input: 'ignored',
+    });
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /invalid note name/);
+    assert.deepEqual(await fs.readdir(root), []);
+  });
 
-    result = runCli(['delete', 'alpha'], { env });
-    assert.equal(result.status, 0);
+  it('exits 1 for show/overwrite/delete on a missing note', async () => {
+    const cases: string[][] = [
+      ['show', 'ghost'],
+      ['overwrite', 'ghost', 'x'],
+      ['delete', 'ghost'],
+    ];
+    for (const args of cases) {
+      const result = await run(args, { notesDir });
+      assert.equal(result.code, 1, `${args.join(' ')} -> ${result.stderr}`);
+      assert.match(result.stderr, /^error: note not found: ghost\n$/);
+    }
+  });
 
-    result = runCli(['list'], { env });
-    assert.equal(result.status, 0);
+  it('shows the stored bytes verbatim', async () => {
+    const text = 'héllo\n\nwörld\n';
+    await run(['create', 'unicode', text], { notesDir });
+    const result = await run(['show', 'unicode'], { notesDir });
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, '');
+    assert.equal(result.stdout, text);
+  });
+
+  it('lists notes sorted, and prints nothing for an empty or missing directory', async () => {
+    let result = await run(['list'], { notesDir });
+    assert.equal(result.code, 0);
     assert.equal(result.stdout, '');
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
 
-test('cli reads text from stdin when omitted', () => {
-  const dir = tempDir();
+    await run(['create', 'charlie', 'c'], { notesDir });
+    await run(['create', 'alpha', 'a'], { notesDir });
+    await run(['create', 'bravo', 'b'], { notesDir });
 
-  try {
-    let result = runCli(['create', 'stdin-note'], {
-      env: { NOTES_DIR: dir },
-      input: 'from stdin\n',
-    });
-    assert.equal(result.status, 0);
+    result = await run(['list'], { notesDir });
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, 'alpha\nbravo\ncharlie\n');
 
-    result = runCli(['show', 'stdin-note'], {
-      env: { NOTES_DIR: dir },
-    });
-    assert.equal(result.status, 0);
-    assert.equal(result.stdout, 'from stdin\n');
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
+    result = await run(['list'], { notesDir: path.join(root, 'nowhere') });
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, '');
+  });
 
-test('cli rejects invalid name', () => {
-  const dir = tempDir();
+  it('round-trips create -> list -> show -> overwrite -> delete', async () => {
+    const created = await run(['create', 'todo', 'buy milk\n'], { notesDir });
+    assert.equal(created.code, 0);
 
-  try {
-    const result = runCli(['create', 'bad/name', 'x'], {
-      env: { NOTES_DIR: dir },
-    });
+    const listed = await run(['list'], { notesDir });
+    assert.equal(listed.stdout, 'todo\n');
 
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /Invalid note name/);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
+    const shown = await run(['show', 'todo'], { notesDir });
+    assert.equal(shown.code, 0);
+    assert.equal(shown.stdout, 'buy milk\n');
 
-test('cli rejects unknown command', () => {
-  const dir = tempDir();
+    const overwritten = await run(['overwrite', 'todo'], { notesDir, input: 'buy bread\n' });
+    assert.equal(overwritten.code, 0);
+    assert.equal(await readNoteFile(notesDir, 'todo'), 'buy bread\n');
 
-  try {
-    const result = runCli(['bogus'], { env: { NOTES_DIR: dir } });
+    const deleted = await run(['delete', 'todo'], { notesDir });
+    assert.equal(deleted.code, 0);
 
-    assert.equal(result.status, 2);
-    assert.match(result.stderr, /Unknown command/);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
+    const after = await run(['list'], { notesDir });
+    assert.equal(after.stdout, '');
+    assert.deepEqual(await fs.readdir(notesDir), []);
+  });
 
-test('cli reports missing note', () => {
-  const dir = tempDir();
+  it('preserves trailing newlines and non-ASCII text byte for byte', async () => {
+    const text = 'ßeta\n\n\n☃ snowman ☃\n';
+    await run(['create', 'bytes'], { notesDir, input: text });
+    assert.equal(await readNoteFile(notesDir, 'bytes'), text);
 
-  try {
-    const result = runCli(['show', 'missing'], {
-      env: { NOTES_DIR: dir },
-    });
+    const shown = await run(['show', 'bytes'], { notesDir });
+    assert.equal(shown.stdout, text);
 
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /Note not found/);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('cli usage errors exit 2', () => {
-  const dir = tempDir();
-
-  try {
-    let result = runCli([], { env: { NOTES_DIR: dir } });
-    assert.equal(result.status, 2);
-    assert.match(result.stderr, /Missing command/);
-
-    result = runCli(['create'], { env: { NOTES_DIR: dir } });
-    assert.equal(result.status, 2);
-    assert.match(result.stderr, /Missing name/);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+    const overwritten = await run(['overwrite', 'bytes', text.trimEnd()], { notesDir });
+    assert.equal(overwritten.code, 0);
+    assert.equal(await readNoteFile(notesDir, 'bytes'), text.trimEnd());
+  });
 });
 === END ===
+
+Implemented the CLI exactly per the design: `errors.ts` holds `AppError` and the exit codes, `notes.ts` is the sole filesystem module (validation is the security boundary, with a `path.dirname` check as defence in depth), `commands.ts` maps argv/stdin onto those calls with a `Map` command registry, and `cli.ts` resolves `NOTES_DIR`, reads stdin only when `[text]` is omitted, and prints a single `error: …` line to stderr while setting `process.exitCode`. Unit tests cover the validation table, traversal, and each fs operation; end-to-end tests spawn the CLI (via `--import tsx` on the source, or plain `node` on the compiled output) and assert stdout/stderr/exit codes, stdin-vs-argument precedence, sorting, round-trips, and byte-for-byte preservation including trailing newlines and non-ASCII text.
+
 build_command: npm run build
 test_command: npm test
