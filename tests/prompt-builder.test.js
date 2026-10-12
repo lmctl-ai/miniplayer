@@ -11,9 +11,17 @@ const faketool = fileURLToPath(new URL('./fixtures/faketool.js', import.meta.url
 test('buildInitialSystemPrompt creates preamble and respects empty tools', async () => {
   const prompt = await buildInitialSystemPrompt({ cwd: '/test/workspace', toolsConfig: [] });
   assert.ok(prompt.includes('You are running in directory: /test/workspace'));
+  assert.ok(!/tool/i.test(prompt), 'with no tools configured the prompt must not mention tools (models then hallucinate tool calls)');
+  assert.ok(!prompt.includes('Available Tools'));
+});
+
+test('buildInitialSystemPrompt mentions tools in the preamble only when tools are configured', async () => {
+  const prompt = await buildInitialSystemPrompt({
+    cwd: '/test/workspace',
+    toolsConfig: [{ name: 'faketool', command: faketool }],
+  });
   assert.ok(prompt.includes('Stateless one-shot tools are available for operations.'));
   assert.ok(prompt.includes('Large outputs are saved to files by the tools'));
-  assert.ok(!prompt.includes('Available Tools'));
 });
 
 test('buildInitialSystemPrompt gathers tool outline via --list from configured tools', async () => {

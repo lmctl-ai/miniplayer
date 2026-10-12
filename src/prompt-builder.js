@@ -122,11 +122,15 @@ export async function buildInitialSystemPrompt({
   const effectiveCwd = resolve(cwd);
   const sections = [];
 
-  // (a) Preamble (3-5 lines)
+  // (a) Preamble. Tools are mentioned only when some are configured: telling a model it has
+  // tools that do not exist makes it emit tool calls as plain text.
+  const hasTools = Array.isArray(toolsConfig) && toolsConfig.some(item => Boolean(parseToolConfigItem(item).command));
   sections.push(
-    `You are running in directory: ${effectiveCwd}\n` +
-    `Stateless one-shot tools are available for operations.\n` +
-    `Large outputs are saved to files by the tools; read them with your configured tools as needed.`
+    `You are running in directory: ${effectiveCwd}` +
+    (hasTools
+      ? `\nStateless one-shot tools are available for operations.\n` +
+        `Large outputs are saved to files by the tools; read them with your configured tools as needed.`
+      : '')
   );
 
   // (b) Configured tools outline
