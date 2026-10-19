@@ -1,21 +1,14 @@
-"""Fail closed on every expected matrix leg, including missing/skipped jobs."""
-import json, os, urllib.request
-repo=os.environ['GITHUB_REPOSITORY'];run=os.environ['GITHUB_RUN_ID'];attempt=os.environ['GITHUB_RUN_ATTEMPT']
+"""Require every native platform result, without eventually consistent REST calls."""
+import json, os
 expected=json.loads(os.environ['EXPECTED_LEGS'])
-if not expected or len(set(expected))!=len(expected):raise SystemExit('expected legs must be nonempty and unique')
-url=f"https://api.github.com/repos/{repo}/actions/runs/{run}/attempts/{attempt}/jobs?per_page=100"
-request=urllib.request.Request(url,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
-with urllib.request.urlopen(request) as response:jobs=json.load(response)['jobs']
+if not expected:raise SystemExit('expected legs must be nonempty')
+needs=json.loads(os.environ['NEEDS_JSON'])
 rows=['| Leg | Result |','|---|---|'];ok=True
-for name in expected:
-    matches=[job for job in jobs if job['name']==name]
-    result=matches[0].get('conclusion') if len(matches)==1 else 'missing or duplicate'
-    ok=ok and result=='success'
-    link=f"[{name}]({matches[0]['html_url']})" if len(matches)==1 else name
-    rows.append(f'| {link} | {result} |')
-for job in jobs:
-    if job['name'] not in expected and job['name'] != 'CI gate':
-        rows.append(f"| [{job['name']}]({job['html_url']}) | unexpected leg: {job.get('conclusion')} |");ok=False
+for key,label in expected.items():
+    result=needs.get(key,{}).get('result','missing')
+    rows.append(f'| {label} | {result} |');ok=ok and result=='success'
+for key in needs.keys()-expected.keys():
+    rows.append(f"| {key} | unexpected leg: {needs[key].get('result')} |");ok=False
 summary='\n'.join(rows)+'\n';print(summary)
 with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as output:output.write(summary)
 raise SystemExit(0 if ok else 1)
