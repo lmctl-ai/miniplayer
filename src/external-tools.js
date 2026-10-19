@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { basename, isAbsolute, resolve } from 'node:path';
+import { basename, extname, isAbsolute, resolve } from 'node:path';
 import { tool, jsonSchema } from 'ai';
 
 export const MAX_STDOUT_BYTES = 256 * 1024;
@@ -49,11 +49,22 @@ export function parseToolConfigItem(item) {
   throw new TypeError('Invalid tool config item');
 }
 
-function signalGroup(child, sig) {
+// Explicit JavaScript file paths work without shebang execution or a shell on Windows.
+export function toolSpawnSpec(command, args) {
+  const isPath = isAbsolute(command) || command.includes('/') || command.includes('\\');
+  return isPath && ['.js', '.mjs', '.cjs'].includes(extname(command).toLowerCase())
+    ? { command: process.execPath, args: [command, ...args] }
+    : { command, args };
+}
+
+export function signalGroup(child, sig) {
   if (child.pid === undefined) return;
   try {
     if (process.platform !== 'win32') process.kill(-child.pid, sig);
-    else child.kill(sig);
+    else {
+      const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { shell: false, windowsHide: true, stdio: 'ignore' });
+      killer.once('error', () => { try { child.kill(sig); } catch {} });
+    }
   } catch {
     try { child.kill(sig); } catch { /* child exited */ }
   }
@@ -124,7 +135,8 @@ export function executeExternalTool({
     };
 
     try {
-      child = spawn(command, args, {
+      const invocation = toolSpawnSpec(command, args);
+      child = spawn(invocation.command, invocation.args, {
         shell: false,
         cwd: effectiveCwd,
         env,

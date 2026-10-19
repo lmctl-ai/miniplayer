@@ -190,3 +190,13 @@ test('external tool handles tool early exit with large stdin without EPIPE crash
   assert.ok(res.stderr.includes('immediate failure'));
 });
 
+
+test('JavaScript file tools preserve argv literally without a shell', async () => {
+  const { toolSpawnSpec } = await import('../src/external-tools.js');
+  const args = ['a b', '"quoted"', 'trailing\\', '$(not-a-command)', ''];
+  assert.deepEqual(toolSpawnSpec(faketool, args), { command: process.execPath, args: [faketool, ...args] });
+  assert.deepEqual(toolSpawnSpec('ordinary-tool', args), { command: 'ordinary-tool', args });
+  const result = await createExternalTools({ toolsConfig: [faketool] }).faketool.execute({ args: ['echo', ...args] });
+  assert.equal(result.exit_code, 0);
+  assert.equal(result.stdout, args.join(' ') + '\n');
+});

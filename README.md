@@ -210,7 +210,7 @@ Tool names are normalized to `[a-zA-Z0-9_-]`.
 ### Security and execution model
 
 1. **Direct child process execution**: Tools are spawned directly using `child_process.spawn(command, args, { shell: false })`. No shell is invoked, preventing shell interpolation and command injection vulnerabilities.
-2. **Process group isolation and clean cancellation**: Each tool is launched in a detached process group. Aborting or cancelling a turn sends `SIGTERM` to the process group (`-pid`), escalating to `SIGKILL` after 250 ms if the process does not terminate.
+2. **Process group isolation and clean cancellation**: On POSIX, each tool is launched in a detached process group; cancellation sends SIGTERM and escalates to SIGKILL after 250 ms. Windows uses `taskkill /T /F` for the process tree. Explicit JavaScript file paths (`.js`, `.mjs`, `.cjs`) run through the current Node executable on every OS, without a shell or dependence on shebang support.
 3. **Bounded I/O**: Standard output is capped at 256 KiB and standard error at 64 KiB. If limits are exceeded, remaining output is drained and discarded, and the tool result includes `truncated: true`.
 4. **Resilient error handling**: Missing binaries (`ENOENT`) or spawn failures return structured tool error responses back to the model rather than crashing miniplayer.
 
@@ -376,6 +376,12 @@ The script verifies:
 1. `miniplayer run -m <model> "prompt"` (pure prompt execution).
 2. `miniplayer classify -m <model> --file <response>` (JSON classification).
 3. `miniplayer run -m <model> --system-file <sys> < <input>` (caller-owned system prompt and piped input).
+
+## Platforms
+
+CI runs the hermetic suite on **Node 20 and 22** independently on `ubuntu-latest` (x64), `ubuntu-24.04-arm`, `macos-latest` (arm64), `macos-15-intel` and `windows-latest`. A final gate lists and requires all ten legs; no OS is continue-on-error. Tests are enumerated by a Node launcher rather than shell globs, and tool arguments are always passed without shell expansion.
+
+POSIX permission-bit assertions and the Python `pty` Ctrl-C integration fixture require their native Unix facilities; those individual checks are explicitly reported as skipped on Windows (the rest of each suite still runs). Windows file privacy relies on the user profile's ACLs rather than Unix chmod bits. The manual Ollama shell script requires Bash; CI syntax-checks it using Git for Windows Bash on Windows. JavaScript tool files are launched with the active Node runtime, while native executables are launched directly.
 
 ## License
 

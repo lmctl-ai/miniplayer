@@ -500,7 +500,7 @@ test('13. timeouts are passed via AbortSignal', async () => {
   }
 });
 
-test('14. cache dir mode 0o700, files mode 0o600', async () => {
+test('14. cache dir mode 0o700, files mode 0o600', { skip: process.platform === 'win32' ? 'POSIX permission bits are not Windows ACLs' : false }, async () => {
   const baseDir = createTempDir();
   const cacheDir = join(baseDir, 'nested', 'cache', 'dir');
   try {

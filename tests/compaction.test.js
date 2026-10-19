@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import test from 'node:test';
 import {
   compactSessionContext,
@@ -121,7 +121,7 @@ test('compactSessionContext replaces older turns, preserves last 2 turns, writes
 
     // Check durable-memory/index.md pointer was appended
     const indexContent = await readFile(join(cwd, 'durable-memory', 'index.md'), 'utf8');
-    assert.ok(indexContent.includes(result.notesFile.split('/').pop()));
+    assert.ok(indexContent.includes(basename(result.notesFile)));
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }

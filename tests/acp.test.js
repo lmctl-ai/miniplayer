@@ -28,7 +28,7 @@ test('ACP creates private metadata sessions with live context', async t => {
   const init = await initialize(agent);
   assert.equal(init.agentCapabilities.loadSession, true);
   const { sessionId } = await agent.handle('session/new', { cwd, mcpServers: [] });
-  assert.equal(statSync(store.path(sessionId)).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal(statSync(store.path(sessionId)).mode & 0o777, 0o600);
   assert.deepEqual(await agent.handle('session/prompt', prompt(sessionId, 'one')), { stopReason: 'end_turn' });
   const session = store.load(sessionId);
   assert.equal(session.turns.length, 1);

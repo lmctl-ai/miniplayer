@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { buildInitialSystemPrompt, MAX_PROMPT_FILE_BYTES } from '../src/prompt-builder.js';
@@ -9,15 +9,15 @@ import { buildInitialSystemPrompt, MAX_PROMPT_FILE_BYTES } from '../src/prompt-b
 const faketool = fileURLToPath(new URL('./fixtures/faketool.js', import.meta.url));
 
 test('buildInitialSystemPrompt creates preamble and respects empty tools', async () => {
-  const prompt = await buildInitialSystemPrompt({ cwd: '/test/workspace', toolsConfig: [] });
-  assert.ok(prompt.includes('You are running in directory: /test/workspace'));
+  const prompt = await buildInitialSystemPrompt({ cwd: resolve('test', 'workspace'), toolsConfig: [] });
+  assert.ok(prompt.includes(`You are running in directory: ${resolve('test', 'workspace')}`));
   assert.ok(!/tool/i.test(prompt), 'with no tools configured the prompt must not mention tools (models then hallucinate tool calls)');
   assert.ok(!prompt.includes('Available Tools'));
 });
 
 test('buildInitialSystemPrompt mentions tools in the preamble only when tools are configured', async () => {
   const prompt = await buildInitialSystemPrompt({
-    cwd: '/test/workspace',
+    cwd: resolve('test', 'workspace'),
     toolsConfig: [{ name: 'faketool', command: faketool }],
   });
   assert.ok(prompt.includes('Stateless one-shot tools are available for operations.'));
@@ -88,7 +88,7 @@ test('buildInitialSystemPrompt includes durable-memory/index.md and caps at 32 K
   }
 });
 
-test('unreadable AGENTS.md warns on stderr and skips only that section', async () => {
+test('unreadable AGENTS.md warns on stderr and skips only that section', { skip: process.platform === 'win32' ? 'POSIX permission bits are not Windows ACLs' : false }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'miniplayer-prompt-unreadable-'));
   try {
     const agentsPath = join(dir, 'AGENTS.md');

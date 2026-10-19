@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { stat, readFile, open } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import { parseToolConfigItem } from './external-tools.js';
+import { basename, join, resolve } from 'node:path';
+import { parseToolConfigItem, toolSpawnSpec, signalGroup } from './external-tools.js';
 
 export const MAX_PROMPT_FILE_BYTES = 32 * 1024; // 32 KiB
 
@@ -17,7 +17,7 @@ async function readFileWithCap(filePath, cap = MAX_PROMPT_FILE_BYTES) {
       const { bytesRead } = await handle.read(buffer, 0, bytesToRead, 0);
       let content = buffer.subarray(0, bytesRead).toString('utf8');
       if (info.size > cap) {
-        content += `\n[${filePath.split('/').pop()} truncated at 32 KiB]`;
+        content += `\n[${basename(filePath)} truncated at 32 KiB]`;
       }
       return content;
     } finally {
@@ -44,11 +44,7 @@ async function getToolOutline(toolSpec, cwd, env) {
     };
 
     let child;
-    const killGroup = (sig = 'SIGKILL') => {
-      try {
-        if (child?.pid) process.kill(-child.pid, sig);
-      } catch {}
-    };
+    const killGroup = (sig = 'SIGKILL') => { if (child) signalGroup(child, sig); };
 
     let timer = setTimeout(() => {
       try {
@@ -62,11 +58,12 @@ async function getToolOutline(toolSpec, cwd, env) {
     timer.unref?.();
 
     try {
-      child = spawn(command, ['--list'], {
+      const invocation = toolSpawnSpec(command, ['--list']);
+      child = spawn(invocation.command, invocation.args, {
         shell: false,
         cwd,
         env,
-        detached: true,
+        detached: process.platform !== 'win32',
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch {
