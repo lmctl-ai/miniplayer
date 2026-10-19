@@ -36,15 +36,21 @@ test('real TTY Ctrl-C exits 0 when idle and cancels turn when running', { timeou
   const idleConfig = join(idleDir, 'config.json');
   writeFileSync(idleConfig, '{}');
 
+  let idleDiagnostic = '';
   const idleCode = await new Promise((resolve, reject) => {
     const py = spawn('python3', ['-c', `
-import pty, os, sys, time, subprocess, select
+import pty, os, sys, time, subprocess, select, fcntl, termios
 node_bin, cli_bin, cfg = sys.argv[1:4]
 master, slave = pty.openpty()
+# Give the child the same controlling-terminal/foreground-group contract as a real shell.
+# Merely wiring an openpty slave to stdio leaves macOS terminal signals undelivered.
+def own_terminal():
+    os.setsid()
+    fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 env = dict(os.environ)
 env['MINIPLAYER_CONFIG'] = cfg
 proc = subprocess.Popen([node_bin, cli_bin, 'chat', '-m', 'mock/Echo', '--no-wrapup'],
-                        stdin=slave, stdout=slave, stderr=slave, close_fds=True, env=env)
+                        stdin=slave, stdout=slave, stderr=slave, close_fds=True, env=env, preexec_fn=own_terminal)
 os.close(slave)
 
 # Wait for REPL prompt '> '
@@ -64,13 +70,16 @@ try:
     sys.exit(proc.returncode)
 except subprocess.TimeoutExpired:
     proc.kill()
+    proc.wait()
+    sys.stderr.write('idle PTY timeout; output=' + repr(out))
     sys.exit(124)
 `, process.execPath, bin, idleConfig]);
 
+    py.stderr.on('data', data => { idleDiagnostic += data.toString('utf8'); });
     py.on('error', reject);
     py.on('exit', resolve);
   });
-  assert.equal(idleCode, 0, 'Idle Ctrl-C in TTY mode must exit with code 0');
+  assert.equal(idleCode, 0, `Idle Ctrl-C in TTY mode must exit with code 0: ${idleDiagnostic}`);
 
   // 2. In-flight Ctrl-C cancels turn, stays in REPL, then /exit exits 0
   const workDir = mkdtempSync(join(tmpdir(), 'miniplayer-tty-ctrlc-'));
@@ -114,17 +123,22 @@ except subprocess.TimeoutExpired:
   const port = server.address().port;
   const turnResult = await new Promise((resolve, reject) => {
     const py = spawn('python3', ['-c', `
-import pty, os, sys, time, subprocess, select
+import pty, os, sys, time, subprocess, select, fcntl, termios
 
 node_bin, cli_bin, port, cfg, cat, start_file = sys.argv[1:7]
 master, slave = pty.openpty()
+# Give the child the same controlling-terminal/foreground-group contract as a real shell.
+# Merely wiring an openpty slave to stdio leaves macOS terminal signals undelivered.
+def own_terminal():
+    os.setsid()
+    fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 env = dict(os.environ)
 env['MINIPLAYER_CONFIG'] = cfg
 env['MINIPLAYER_CATALOG'] = cat
 env['OLLAMA_HOST'] = f'http://127.0.0.1:{port}'
 
 proc = subprocess.Popen([node_bin, cli_bin, 'chat', '-m', 'ollama/qwen2.5:14b', '--no-wrapup'],
-                        stdin=slave, stdout=slave, stderr=slave, close_fds=True, env=env)
+                        stdin=slave, stdout=slave, stderr=slave, close_fds=True, env=env, preexec_fn=own_terminal)
 os.close(slave)
 
 output = b''
