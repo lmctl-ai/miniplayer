@@ -41,6 +41,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - name: Test the fail-closed gate
+        run: python3 scripts/test-ci-gate.py
       - name: List and require every leg
         env:
           GH_TOKEN: ${{ github.token }}

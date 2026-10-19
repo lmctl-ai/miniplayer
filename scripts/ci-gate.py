@@ -2,6 +2,7 @@
 import json, os, urllib.request
 repo=os.environ['GITHUB_REPOSITORY'];run=os.environ['GITHUB_RUN_ID'];attempt=os.environ['GITHUB_RUN_ATTEMPT']
 expected=json.loads(os.environ['EXPECTED_LEGS'])
+if not expected or len(set(expected))!=len(expected):raise SystemExit('expected legs must be nonempty and unique')
 url=f"https://api.github.com/repos/{repo}/actions/runs/{run}/attempts/{attempt}/jobs?per_page=100"
 request=urllib.request.Request(url,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
 with urllib.request.urlopen(request) as response:jobs=json.load(response)['jobs']
@@ -12,6 +13,9 @@ for name in expected:
     ok=ok and result=='success'
     link=f"[{name}]({matches[0]['html_url']})" if len(matches)==1 else name
     rows.append(f'| {link} | {result} |')
+for job in jobs:
+    if job['name'] not in expected and job['name'] != 'CI gate':
+        rows.append(f"| [{job['name']}]({job['html_url']}) | unexpected leg: {job.get('conclusion')} |");ok=False
 summary='\n'.join(rows)+'\n';print(summary)
 with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as output:output.write(summary)
 raise SystemExit(0 if ok else 1)

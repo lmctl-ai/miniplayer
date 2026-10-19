@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { basename, extname, isAbsolute, resolve } from 'node:path';
+import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import { tool, jsonSchema } from 'ai';
 
 export const MAX_STDOUT_BYTES = 256 * 1024;
@@ -62,7 +62,7 @@ export function signalGroup(child, sig) {
   try {
     if (process.platform !== 'win32') process.kill(-child.pid, sig);
     else {
-      const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { shell: false, windowsHide: true, stdio: 'ignore' });
+      const killer = spawn(join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'), ['/pid', String(child.pid), '/t', '/f'], { shell: false, windowsHide: true, stdio: 'ignore' });
       killer.once('error', () => { try { child.kill(sig); } catch {} });
     }
   } catch {
