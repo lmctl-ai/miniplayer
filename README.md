@@ -14,13 +14,37 @@ The core product story:
 
 ## Install
 
-From this repository:
+### Standalone Executable (Bun binary)
+
+Standalone executables with zero Node or dependency requirements are published on [GitHub Releases](https://github.com/lmctl-ai/miniplayer/releases) for Linux (`x64`, `arm64`), macOS (`arm64`, `x64`), and Windows (`x64`):
+
+```sh
+# Download binary and checksums for your platform
+curl -LO https://github.com/lmctl-ai/miniplayer/releases/download/<tag>/miniplayer-linux-x64
+curl -LO https://github.com/lmctl-ai/miniplayer/releases/download/<tag>/SHA256SUMS
+
+# Verify checksum
+sha256sum --check --ignore-missing SHA256SUMS
+
+chmod +x miniplayer-linux-x64
+./miniplayer-linux-x64 --version
+```
+
+### From Source (Node 20+)
 
 ```sh
 npm install
 npm link
 miniplayer --help
 ```
+
+### Version
+
+```sh
+miniplayer --version    # also -v or version
+```
+
+Prints `miniplayer X.Y.Z` (package version plus git commit and dirty status for dev builds).
 
 ## Model catalog
 
@@ -382,6 +406,18 @@ The script verifies:
 CI runs the hermetic suite on **Node 20 and 22** independently on `ubuntu-latest` (x64), `ubuntu-24.04-arm`, `macos-latest` (arm64), `macos-15-intel` and `windows-latest`. A final gate lists and requires all ten legs; no OS is continue-on-error. Tests are enumerated by a Node launcher rather than shell globs, and tool arguments are always passed without shell expansion.
 
 POSIX permission-bit assertions and the Python `pty` Ctrl-C integration fixture require their native Unix facilities; those individual checks are explicitly reported as skipped on Windows (the rest of each suite still runs). Windows file privacy relies on the user profile's ACLs rather than Unix chmod bits. The manual Ollama shell script requires Bash; CI syntax-checks it using Git for Windows Bash on Windows. JavaScript tool files are launched with the active Node runtime, while native executables are launched directly.
+
+## Cutting a release
+
+Releases are triggered on-demand via the dispatch-only GitHub Actions workflow:
+
+```sh
+# Dispatch next patch release (e.g. v2.0.0 -> v2.0.1)
+gh workflow run release.yml -R lmctl-ai/miniplayer
+
+# Or dispatch with an explicit version tag
+gh workflow run release.yml -R lmctl-ai/miniplayer -f release_tag=v2.0.0
+```
 
 ## License
 
