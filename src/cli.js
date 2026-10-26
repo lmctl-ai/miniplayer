@@ -13,6 +13,7 @@ import { buildInitialSystemPrompt } from './prompt-builder.js';
 import { compactSessionContext } from './compaction.js';
 import { randomUUID } from 'node:crypto';
 import { SessionStore, sessionHome, historyMessages } from './session-store.js';
+import { resolveVersionDisplay } from './version.js';
 
 export const WRAP_UP_PROMPT =
   "Before exiting: if this session produced durable knowledge (decisions, conventions, pitfalls, state of work), update durable-memory/ (add or edit a note file and keep durable-memory/index.md as a one-line-per-note table of contents; update AGENTS.md only if a standing instruction changed). If nothing durable, reply 'nothing to update'.";
@@ -24,6 +25,7 @@ export const HELP = `Usage:
   miniplayer classify -m <selector> [--file <path>]
   miniplayer models [--routed] [--source openrouter|litellm] [--provider <name>] [--max-input-price <number>] [--json]
   miniplayer providers [--json]
+  miniplayer --version
   miniplayer --help
 
 Prompts and classification input default to stdin. Without -m, a configured or built-in pool is used.
@@ -740,6 +742,11 @@ export async function execute(args, io, dependencies = {}) {
 
   if (args[0] === '--help' || args[0] === '-h') {
     io.stdout.write(HELP);
+    return 0;
+  }
+
+  if (args[0] === '--version' || args[0] === '-v' || args[0] === '-V' || args[0] === 'version') {
+    io.stdout.write(`miniplayer ${resolveVersionDisplay()}\n`);
     return 0;
   }
 
