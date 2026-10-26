@@ -1,5 +1,7 @@
 node_modules
 node_modules/
+dist
+dist/
 *.log
 
 # lmctl teamfiles carry session wiring/credentials -- never tracked (fleet hygiene sweep, operator 2026-09-21)
