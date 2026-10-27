@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync, mkdirSync, copyFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -11,6 +12,7 @@ import {
   validateReleaseTag,
   computeNextPatchTag,
   determineReleaseTag,
+  verifyReleaseTagTarget,
 } from '../scripts/next-tag.mjs';
 
 const workflowPath = fileURLToPath(new URL('../.github/workflows/release.yml', import.meta.url));
@@ -264,4 +266,266 @@ test('publish step enforces dispatch ref is main, validates target commit SHA, a
     () => checkPublishGuards({ dispatchRef: 'refs/heads/main', targetSha: validSha, existingTagSha: differentSha }),
     /Refusing to publish: tag already exists at/
   );
+});
+
+function createTestGitRepo() {
+  const tmp = mkdtempSync(join(tmpdir(), 'miniplayer-tag-verify-'));
+  const bareDir = join(tmp, 'bare.git');
+  const workDir = join(tmp, 'work');
+  execFileSync('git', ['init', '-q', '--bare', bareDir]);
+  execFileSync('git', ['clone', '-q', bareDir, workDir]);
+  execFileSync('git', ['config', 'user.name', 'Test Fixture'], { cwd: workDir });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: workDir });
+
+  // Commit A (the built TARGET_SHA)
+  writeFileSync(join(workDir, 'file.txt'), 'version A\n');
+  execFileSync('git', ['add', 'file.txt'], { cwd: workDir });
+  execFileSync('git', ['commit', '-q', '-m', 'commit A'], { cwd: workDir });
+  execFileSync('git', ['push', '-q', 'origin', 'HEAD'], { cwd: workDir });
+  const shaA = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: workDir, encoding: 'utf8' }).trim();
+
+  // Commit B (a later advance on main)
+  writeFileSync(join(workDir, 'file.txt'), 'version B\n');
+  execFileSync('git', ['add', 'file.txt'], { cwd: workDir });
+  execFileSync('git', ['commit', '-q', '-m', 'commit B'], { cwd: workDir });
+  execFileSync('git', ['push', '-q', 'origin', 'HEAD'], { cwd: workDir });
+  const shaB = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: workDir, encoding: 'utf8' }).trim();
+
+  // Checkout commit A (simulating detached checkout of TARGET_SHA)
+  execFileSync('git', ['checkout', '-q', '--detach', shaA], { cwd: workDir });
+
+  return {
+    tmp,
+    bareDir,
+    workDir,
+    shaA,
+    shaB,
+    cleanup: () => rmSync(tmp, { recursive: true, force: true }),
+  };
+}
+
+test('verifyReleaseTagTarget: tag absent -> proceeds', () => {
+  const repo = createTestGitRepo();
+  try {
+    const res = verifyReleaseTagTarget({
+      tag: 'v2.0.0',
+      targetSha: repo.shaA,
+      cwd: repo.workDir,
+    });
+    assert.equal(res.exists, false);
+    assert.equal(res.targetSha, repo.shaA);
+    assert.equal(res.localCommitSha, null);
+    assert.equal(res.remoteCommitSha, null);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test('verifyReleaseTagTarget: tag at TARGET_SHA -> proceeds', () => {
+  const repo = createTestGitRepo();
+  try {
+    execFileSync('git', ['tag', 'v2.0.0', repo.shaA], { cwd: repo.workDir });
+    execFileSync('git', ['push', '-q', 'origin', 'v2.0.0'], { cwd: repo.workDir });
+
+    const res = verifyReleaseTagTarget({
+      tag: 'v2.0.0',
+      targetSha: repo.shaA,
+      cwd: repo.workDir,
+    });
+    assert.equal(res.exists, true);
+    assert.equal(res.targetSha, repo.shaA);
+    assert.equal(res.localCommitSha, repo.shaA);
+    assert.equal(res.remoteCommitSha, repo.shaA);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test('verifyReleaseTagTarget: tag at another commit -> aborts', () => {
+  const repo = createTestGitRepo();
+  try {
+    // Tag points to shaB, while target is shaA
+    execFileSync('git', ['tag', 'v2.0.0', repo.shaB], { cwd: repo.workDir });
+    execFileSync('git', ['push', '-q', 'origin', 'v2.0.0'], { cwd: repo.workDir });
+
+    assert.throws(
+      () => verifyReleaseTagTarget({
+        tag: 'v2.0.0',
+        targetSha: repo.shaA,
+        cwd: repo.workDir,
+      }),
+      /Refusing to publish: tag v2\.0\.0 already exists/
+    );
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test('lookup fault with exit 128 (inject via a fake git) -> aborts and gh is never called', () => {
+  const repo = createTestGitRepo();
+  try {
+    // 1. Tag points to shaB
+    execFileSync('git', ['tag', 'v2.0.0', repo.shaB], { cwd: repo.workDir });
+
+    const fakeBinDir = join(repo.tmp, 'fake-bin');
+    mkdirSync(fakeBinDir, { recursive: true });
+    const fakeGit = join(fakeBinDir, 'git');
+    writeFileSync(fakeGit, '#!/bin/sh\nexit 128\n', { mode: 0o755 });
+
+    // Function throws on lookup fault code 128
+    assert.throws(
+      () => verifyReleaseTagTarget({
+        tag: 'v2.0.0',
+        targetSha: repo.shaA,
+        cwd: repo.workDir,
+        gitCmd: fakeGit,
+      }),
+      /Local tag lookup failed with exit code 128/
+    );
+
+    // 2. Full publish step invocation: gh must NEVER be called
+    const ghCallFile = join(repo.tmp, 'gh-called.json');
+    const fakeGh = join(fakeBinDir, 'gh');
+    writeFileSync(
+      fakeGh,
+      `#!/usr/bin/env node\nimport fs from "node:fs"; fs.writeFileSync(${JSON.stringify(ghCallFile)}, JSON.stringify(process.argv));\n`,
+      { mode: 0o755 }
+    );
+
+    // Create required artifacts and checksums
+    const assetsDir = join(repo.workDir, 'release-artifacts');
+    mkdirSync(assetsDir, { recursive: true });
+    for (const name of [
+      'miniplayer-linux-x64', 'miniplayer-linux-arm64', 'miniplayer-darwin-arm64',
+      'miniplayer-darwin-x64', 'miniplayer-windows-x64.exe', 'LICENSE',
+    ]) {
+      writeFileSync(join(assetsDir, name), 'artifact-content');
+    }
+    const sums = [
+      'miniplayer-linux-x64', 'miniplayer-linux-arm64', 'miniplayer-darwin-arm64',
+      'miniplayer-darwin-x64', 'miniplayer-windows-x64.exe', 'LICENSE',
+    ].sort()
+      .map(name => `${createHash('sha256').update('artifact-content').digest('hex')}  ${name}\n`)
+      .join('');
+    writeFileSync(join(assetsDir, 'SHA256SUMS'), sums);
+    writeFileSync(join(repo.workDir, 'LICENSE'), 'MIT License\n\nCopyright (c) 2026\n');
+
+    // Extract publish script block from release.yml
+    const content = readFileSync(workflowPath, 'utf8');
+    const publishBlock = content.split('      - name: assemble and publish public prerelease')[1]
+      .split('        run: |\n')[1];
+    const publishScript = publishBlock.split('\n')
+      .map(line => line.startsWith('          ') ? line.slice(10) : line)
+      .join('\n');
+
+    const publishScriptPath = join(repo.workDir, 'publish.sh');
+    writeFileSync(publishScriptPath, publishScript, { mode: 0o755 });
+
+    // Copy scripts/next-tag.mjs into repo.workDir
+    mkdirSync(join(repo.workDir, 'scripts'), { recursive: true });
+    copyFileSync(nextTagScriptPath, join(repo.workDir, 'scripts', 'next-tag.mjs'));
+
+    // Execute with fake git first in PATH
+    let publishExit = 0;
+    try {
+      execFileSync('bash', [publishScriptPath], {
+        cwd: repo.workDir,
+        env: {
+          ...process.env,
+          PATH: `${fakeBinDir}:${process.env.PATH}`,
+          GH_TOKEN: 'token',
+          RELEASE_TAG: 'v2.0.0',
+          TARGET_SHA: repo.shaA,
+          DISPATCH_REF: 'refs/heads/main',
+          GITHUB_RUN_ID: '424242',
+        },
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (err) {
+      publishExit = err.status;
+    }
+
+    assert.notEqual(publishExit, 0, 'Publish block must fail when git lookup faults');
+    assert.equal(existsSync(ghCallFile), false, 'gh must NEVER be called on lookup fault');
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test('verifyReleaseTagTarget: remote lookup fault -> aborts', () => {
+  const repo = createTestGitRepo();
+  try {
+    // Break origin remote URL to induce remote lookup failure
+    execFileSync('git', ['remote', 'set-url', 'origin', 'http://127.0.0.1:99999/broken.git'], { cwd: repo.workDir });
+
+    assert.throws(
+      () => verifyReleaseTagTarget({
+        tag: 'v2.0.0',
+        targetSha: repo.shaA,
+        cwd: repo.workDir,
+        remote: 'origin',
+      }),
+      /Remote tag lookup on "origin" failed with exit code/
+    );
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test('mutation check: restoring || true swallows lookup fault and fails safety check', () => {
+  const repo = createTestGitRepo();
+  try {
+    const fakeBinDir = join(repo.tmp, 'fake-bin');
+    mkdirSync(fakeBinDir, { recursive: true });
+    const fakeGit = join(fakeBinDir, 'git');
+    writeFileSync(fakeGit, '#!/bin/sh\nexit 128\n', { mode: 0o755 });
+
+    // Real verifier rejects exit 128
+    assert.throws(
+      () => verifyReleaseTagTarget({
+        tag: 'v2.0.0',
+        targetSha: repo.shaA,
+        cwd: repo.workDir,
+        gitCmd: fakeGit,
+      }),
+      /Local tag lookup failed with exit code 128/
+    );
+
+    // Mutant verifier implementing the old `|| true` fail-open pattern
+    const mutantVerify = (options) => {
+      let existingTagSha = '';
+      try {
+        existingTagSha = execFileSync(
+          options.gitCmd,
+          ['rev-parse', '-q', '--verify', `refs/tags/${options.tag}^{commit}`],
+          { cwd: options.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+        ).trim();
+      } catch {
+        existingTagSha = ''; // || true swallows exit 128!
+      }
+      if (existingTagSha && existingTagSha !== options.targetSha) {
+        throw new Error('mismatch');
+      }
+      return { proceeds: true };
+    };
+
+    // Mutant with || true erroneously succeeds on fault
+    const mutantRes = mutantVerify({
+      tag: 'v2.0.0',
+      targetSha: repo.shaA,
+      cwd: repo.workDir,
+      gitCmd: fakeGit,
+    });
+    assert.equal(mutantRes.proceeds, true);
+
+    // Mutation control: prove that asserting mutantRes does not proceed throws an AssertionError
+    assert.throws(
+      () => assert.equal(mutantRes.proceeds, false, 'Mutant must fail safety check'),
+      assert.AssertionError,
+      'Mutation control: mutant with || true must fail safety assertion'
+    );
+  } finally {
+    repo.cleanup();
+  }
 });

@@ -119,11 +119,45 @@ jobs:
           # Verify tag matches vMAJOR.MINOR.PATCH
           python3 -c 'import re, sys; sys.exit(0 if re.fullmatch(r"v\d+\.\d+\.\d+", sys.argv[1]) else f"Invalid tag format: {sys.argv[1]}")' "$RELEASE_TAG"
 
-          # If the tag already exists, verify it resolves exactly to the built commit TARGET_SHA
-          existing_tag_sha=$(git rev-parse -q --verify "refs/tags/$RELEASE_TAG^{commit}" 2>/dev/null || true)
-          if [ -n "$existing_tag_sha" ] && [ "$existing_tag_sha" != "$TARGET_SHA" ]; then
-            echo "Refusing to publish: tag $RELEASE_TAG already exists and points to $existing_tag_sha, not target $TARGET_SHA" >&2
-            exit 1
+          # Verify tag target: tag must either be positively absent (both locally and on remote)
+          # or resolve exactly to TARGET_SHA. Aborts on any lookup error or commit mismatch.
+          if [ -f scripts/next-tag.mjs ]; then
+            node scripts/next-tag.mjs --verify-target
+          else
+            set +e
+            local_tag_sha=$(git rev-parse -q --verify "refs/tags/$RELEASE_TAG^{commit}" 2>/dev/null)
+            local_rc=$?
+            set -e
+            if [ "$local_rc" -eq 0 ]; then
+              if [ "$local_tag_sha" != "$TARGET_SHA" ]; then
+                echo "Refusing to publish: tag $RELEASE_TAG already exists locally at $local_tag_sha, not target $TARGET_SHA" >&2
+                exit 1
+              fi
+            elif [ "$local_rc" -ne 1 ]; then
+              echo "Refusing to publish: local git lookup failed with exit code $local_rc" >&2
+              exit 1
+            fi
+
+            if git config remote.origin.url >/dev/null 2>&1; then
+              set +e
+              remote_ls=$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}" 2>/dev/null)
+              remote_rc=$?
+              set -e
+              if [ "$remote_rc" -ne 0 ]; then
+                echo "Refusing to publish: remote tag lookup failed on origin with exit code $remote_rc" >&2
+                exit 1
+              fi
+              if [ -n "$remote_ls" ]; then
+                remote_tag_sha=$(echo "$remote_ls" | awk -v tag="refs/tags/$RELEASE_TAG^{}" '$2 == tag { print $1; exit }')
+                if [ -z "$remote_tag_sha" ]; then
+                  remote_tag_sha=$(echo "$remote_ls" | awk -v tag="refs/tags/$RELEASE_TAG" '$2 == tag { print $1; exit }')
+                fi
+                if [ "$remote_tag_sha" != "$TARGET_SHA" ]; then
+                  echo "Refusing to publish: tag $RELEASE_TAG already exists on origin at $remote_tag_sha, not target $TARGET_SHA" >&2
+                  exit 1
+                fi
+              fi
+            fi
           fi
 
           # Verify required artifacts exist
