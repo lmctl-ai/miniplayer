@@ -49,38 +49,11 @@ jobs:
       - name: determine release tag
         id: version
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          manual_tag="${{ inputs.release_tag }}"
-          if [ -n "$manual_tag" ]; then
-            tag="$manual_tag"
-          else
-            tag=$(python3 - <<'PY'
-          import json, re, subprocess
-          pkg = json.load(open('package.json'))
-          pkg_ver = pkg.get('version', '0.0.0')
-          m = re.match(r'^(\d+)\.(\d+)(?:\.(\d+))?$', pkg_ver)
-          major, minor = m.group(1), m.group(2)
-          target_patch = int(m.group(3) or '0')
-
-          res = subprocess.run(['git', 'tag', '-l', f'v{major}.{minor}.*'], capture_output=True, text=True)
-          tags = res.stdout.strip().split()
-          patches = []
-          for t in tags:
-              tm = re.fullmatch(rf'v{major}\.{minor}\.(\d+)', t)
-              if tm:
-                  patches.append(int(tm.group(1)))
-
-          if not patches:
-              tag = f"v{major}.{minor}.{target_patch}"
-          else:
-              tag = f"v{major}.{minor}.{max(patches) + 1}"
-          print(tag)
-          PY
-          )
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "Release tag: $tag"
+          node scripts/next-tag.mjs
       - name: install dependencies
         run: npm ci
       - name: compile standalone executables
