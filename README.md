@@ -409,7 +409,7 @@ POSIX permission-bit assertions and the Python `pty` Ctrl-C integration fixture 
 
 ## Cutting a release
 
-Releases are triggered on-demand via the dispatch-only GitHub Actions workflow:
+Releases are triggered on-demand via the dispatch-only GitHub Actions workflow on `main` (publication is refused on other branches, and tags are pinned to the exact commit SHA tested and built):
 
 ```sh
 # Dispatch next patch release (e.g. v2.0.0 -> v2.0.1)

@@ -51,6 +51,32 @@ test('release workflow exists and satisfies automation security contract', () =>
   // Tag format regex check in workflow
   assert.match(content, /v\\d\+\\.\\d\+\\.\\d\+/, 'Must enforce vMAJOR.MINOR.PATCH format');
 
+  // Tag target MUST be pinned to TARGET_SHA (exact commit checked out), NEVER a branch name like 'main'
+  assert.match(content, /--target\s+"\$TARGET_SHA"/, 'Must tag exact TARGET_SHA');
+  assert.equal(
+    /--target\s+main\b/.test(content),
+    false,
+    'Workflow must not target branch "main"; must tag exact commit SHA',
+  );
+
+  // Must pass TARGET_SHA and DISPATCH_REF via env:
+  assert.match(content, /TARGET_SHA:\s*\$\{\{\s*github\.sha\s*\}\}/);
+  assert.match(content, /DISPATCH_REF:\s*\$\{\{\s*github\.ref\s*\}\}/);
+
+  // Must refuse publication unless dispatched from refs/heads/main
+  assert.match(
+    content,
+    /if\s*\[\s*"\$DISPATCH_REF"\s*!=\s*"refs\/heads\/main"\s*\];\s*then/,
+    'Must refuse publication if DISPATCH_REF is not refs/heads/main',
+  );
+
+  // Must verify that if the tag already exists, it points to TARGET_SHA
+  assert.match(
+    content,
+    /git rev-parse\s+-q\s+--verify\s+"refs\/tags\/\$RELEASE_TAG\^\{commit\}"/,
+    'Must verify existing tag matches TARGET_SHA',
+  );
+
   // Security audit: NEVER interpolate ${{ }} into run scripts
   // All inputs and event metadata must pass through env:
   const lines = content.split('\n');
@@ -186,4 +212,56 @@ test('next-tag script validates explicit tags, rejects injection strings, and su
   } finally {
     rmSync(scratchDir, { recursive: true, force: true });
   }
+});
+
+test('publish step enforces dispatch ref is main, validates target commit SHA, and pins tag target', () => {
+  function checkPublishGuards({ dispatchRef, targetSha, existingTagSha }) {
+    if (dispatchRef !== 'refs/heads/main') {
+      throw new Error(`Refusing to publish: dispatch ref must be refs/heads/main (got '${dispatchRef}')`);
+    }
+    if (!/^[0-9a-f]{40}$/.test(targetSha)) {
+      throw new Error(`Invalid commit SHA: ${targetSha}`);
+    }
+    if (existingTagSha && existingTagSha !== targetSha) {
+      throw new Error(`Refusing to publish: tag already exists at ${existingTagSha}, not target ${targetSha}`);
+    }
+    return true;
+  }
+
+  const validSha = '0123456789abcdef0123456789abcdef01234567';
+
+  // Allowed on main with matching or non-existing tag
+  assert.equal(checkPublishGuards({ dispatchRef: 'refs/heads/main', targetSha: validSha, existingTagSha: null }), true);
+  assert.equal(checkPublishGuards({ dispatchRef: 'refs/heads/main', targetSha: validSha, existingTagSha: validSha }), true);
+
+  // Refused on non-main refs
+  assert.throws(
+    () => checkPublishGuards({ dispatchRef: 'refs/heads/feat/bun-release', targetSha: validSha }),
+    /Refusing to publish: dispatch ref must be refs\/heads\/main/
+  );
+  assert.throws(
+    () => checkPublishGuards({ dispatchRef: 'refs/heads/release', targetSha: validSha }),
+    /Refusing to publish: dispatch ref must be refs\/heads\/main/
+  );
+  assert.throws(
+    () => checkPublishGuards({ dispatchRef: 'refs/pull/42/merge', targetSha: validSha }),
+    /Refusing to publish: dispatch ref must be refs\/heads\/main/
+  );
+
+  // Refused on invalid/unpinned target SHA (e.g. branch name 'main')
+  assert.throws(
+    () => checkPublishGuards({ dispatchRef: 'refs/heads/main', targetSha: 'main' }),
+    /Invalid commit SHA: main/
+  );
+  assert.throws(
+    () => checkPublishGuards({ dispatchRef: 'refs/heads/main', targetSha: '0123456' }), // short sha
+    /Invalid commit SHA/
+  );
+
+  // Refused if existing tag points to a different commit
+  const differentSha = 'fedcba9876543210fedcba9876543210fedcba98';
+  assert.throws(
+    () => checkPublishGuards({ dispatchRef: 'refs/heads/main', targetSha: validSha, existingTagSha: differentSha }),
+    /Refusing to publish: tag already exists at/
+  );
 });

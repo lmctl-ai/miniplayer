@@ -89,6 +89,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-dist
@@ -97,13 +98,33 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          TARGET_SHA: ${{ github.sha }}
+          DISPATCH_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN"
           test -n "$RELEASE_TAG"
+          test -n "$TARGET_SHA"
+          test -n "$DISPATCH_REF"
+
+          # Refuse to publish unless the dispatched ref is refs/heads/main
+          if [ "$DISPATCH_REF" != "refs/heads/main" ]; then
+            echo "Refusing to publish: dispatch ref must be refs/heads/main (got '$DISPATCH_REF')" >&2
+            exit 1
+          fi
+
+          # Verify commit SHA format (40-hex characters)
+          python3 -c 'import re, sys; sys.exit(0 if re.fullmatch(r"[0-9a-f]{40}", sys.argv[1]) else f"Invalid commit SHA: {sys.argv[1]}")' "$TARGET_SHA"
 
           # Verify tag matches vMAJOR.MINOR.PATCH
           python3 -c 'import re, sys; sys.exit(0 if re.fullmatch(r"v\d+\.\d+\.\d+", sys.argv[1]) else f"Invalid tag format: {sys.argv[1]}")' "$RELEASE_TAG"
+
+          # If the tag already exists, verify it resolves exactly to the built commit TARGET_SHA
+          existing_tag_sha=$(git rev-parse -q --verify "refs/tags/$RELEASE_TAG^{commit}" 2>/dev/null || true)
+          if [ -n "$existing_tag_sha" ] && [ "$existing_tag_sha" != "$TARGET_SHA" ]; then
+            echo "Refusing to publish: tag $RELEASE_TAG already exists and points to $existing_tag_sha, not target $TARGET_SHA" >&2
+            exit 1
+          fi
 
           # Verify required artifacts exist
           expected="miniplayer-linux-x64 miniplayer-linux-arm64 miniplayer-darwin-arm64 miniplayer-darwin-x64 miniplayer-windows-x64.exe SHA256SUMS LICENSE"
@@ -118,7 +139,7 @@ jobs:
           printf 'private-run-id: %s\n\n%s\n\nStandalone cross-platform Bun executables for miniplayer.\n' "$GITHUB_RUN_ID" "$boundary" > release-notes.md
 
           gh release create "$RELEASE_TAG" \
-            --target main \
+            --target "$TARGET_SHA" \
             --title "$RELEASE_TAG" \
             --prerelease \
             --latest=false \
