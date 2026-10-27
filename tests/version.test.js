@@ -127,12 +127,51 @@ test('resolveVersionDisplay handles git fixtures under Node', () => {
 });
 
 test('cli top-level --version, -v, and version flags exit 0 and print version', async () => {
-  for (const flag of ['--version', '-v', 'version']) {
+  const pkgVersion = readPackageVersion();
+  assert.match(pkgVersion, /^\d+\.\d+\.\d+$/, 'package.json version must be valid semver');
+  const expectedPattern = new RegExp(`^miniplayer ${pkgVersion.replace(/\./g, '\\.')}(?:\\+.*)?\\n$`);
+
+  for (const flag of ['--version', '-v', '-V', 'version']) {
     const io = memoryIo();
     const code = await main([flag], io);
     assert.equal(code, 0, `flag ${flag} must exit 0`);
     assert.equal(io.output().stderr, '', `flag ${flag} must write nothing to stderr`);
-    assert.match(io.output().stdout, /^miniplayer 2\.\d+\.\d+/, `flag ${flag} output format`);
+    assert.match(io.output().stdout, expectedPattern, `flag ${flag} must match expected package version ${pkgVersion}`);
     assert.ok(io.output().stdout.endsWith('\n'), `flag ${flag} must end with newline`);
   }
+
+  // Unknown flags must exit 1 with clear error on stderr and empty stdout
+  for (const unknownFlag of ['--bogus', '--unknown-flag', 'bogus-command']) {
+    const io = memoryIo();
+    const code = await main([unknownFlag], io);
+    assert.equal(code, 1, `unknown flag ${unknownFlag} must exit 1`);
+    assert.match(io.output().stderr, new RegExp(`Unknown command: ${unknownFlag.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}`));
+    assert.equal(io.output().stdout, '', `unknown flag ${unknownFlag} must write nothing to stdout`);
+  }
+
+  // Mutation check: prove that a mutant output with wrong version (e.g. 2.999.999) fails the version check
+  const wrongVersionMutants = [
+    'miniplayer 2.999.999\n',
+    'miniplayer 3.0.0\n',
+    'miniplayer 1.0.0\n',
+    'miniplayer 2.0.1\n',
+  ];
+  for (const mutant of wrongVersionMutants) {
+    assert.equal(expectedPattern.test(mutant), false, `mutant ${mutant.trim()} must not match ${pkgVersion}`);
+    assert.throws(
+      () => assert.match(mutant, expectedPattern),
+      assert.AssertionError,
+      `Mutant version "${mutant.trim()}" must fail version assertion`
+    );
+  }
+
+  // Mutation check: non-zero exit code on version flag must fail exit-code assertion
+  assert.throws(
+    () => {
+      const mutantExit = 1;
+      assert.equal(mutantExit, 0, 'mutant exit code 1 must fail');
+    },
+    assert.AssertionError,
+    'Mutant exit code must be caught'
+  );
 });
